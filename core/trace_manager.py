@@ -28,16 +28,25 @@ class TraceManager:
         """
         import uuid
 
+        # Генерируем уникальный ID
+        trace_id = f"TR_{uuid.uuid4().hex[:8]}"
+
         if raster_coords is None:
             # По умолчанию - вся область изображения
-            if self.project and self.project.raster and self.project.raster.pil_image:
-                width, height = self.project.raster.pil_image.size
-                raster_coords = (0, 0, width, height)
+            if self.project and self.project.raster:
+                # Получаем размеры из метаданных
+                info = self.project.raster.get_image_info()
+                if info:
+                    width, height = info['size']
+                    raster_coords = (0, 0, width, height)
+                else:
+                    raster_coords = (0, 0, 1000, 1000)
             else:
-                raster_coords = (0, 0, 100, 100)
+                raster_coords = (0, 0, 1000, 1000)
 
+        # Создаем трассу
         trace = SeismicTrace(
-            id=str(uuid.uuid4())[:8],
+            id=trace_id,
             name=name,
             raster_coords=raster_coords,
             sampling_rate=sampling_rate or (self.project.settings.export_sampling_rate

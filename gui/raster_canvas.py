@@ -590,3 +590,68 @@ class RasterCanvas(QWidget):
     def zoom_original(self):
         """Возвращает исходный масштаб."""
         self.gl_widget.zoom_original()
+
+    def contextMenuEvent(self, event):
+        """Показывает контекстное меню для управления трассами."""
+        from PyQt5.QtWidgets import QMenu, QAction
+
+        menu = QMenu(self)
+
+        # Действия для управления трассами
+        manage_traces_action = QAction("Управление трассами...", self)
+        manage_traces_action.triggered.connect(self.show_trace_manager)
+        menu.addAction(manage_traces_action)
+
+        menu.addSeparator()
+
+        # Действия для текущего интервала
+        if hasattr(self, 'points') and len(self.points) > 0:
+            finish_action = QAction("Завершить интервал", self)
+            finish_action.triggered.connect(self.finish_current_interval_from_menu)
+            menu.addAction(finish_action)
+
+            clear_action = QAction("Очистить интервал", self)
+            clear_action.triggered.connect(self.clear_current_interval)
+            menu.addAction(clear_action)
+
+            menu.addSeparator()
+
+        # Навигация
+        fit_action = QAction("Вписать в экран", self)
+        fit_action.triggered.connect(self.fit_to_view)
+        menu.addAction(fit_action)
+
+        zoom_in_action = QAction("Увеличить", self)
+        zoom_in_action.triggered.connect(self.zoom_in)
+        menu.addAction(zoom_in_action)
+
+        zoom_out_action = QAction("Уменьшить", self)
+        zoom_out_action.triggered.connect(self.zoom_out)
+        menu.addAction(zoom_out_action)
+
+        menu.exec_(event.globalPos())
+
+    def show_trace_manager(self):
+        """Показывает диалог управления трассами."""
+        if self.main_window and self.main_window.project:
+            from gui.simple_trace_panel import SimpleTraceDialog
+            dialog = SimpleTraceDialog(self.main_window.project, self.main_window)
+            dialog.interval_selected.connect(self.on_interval_selected)
+            dialog.show()
+
+    def on_interval_selected(self, trace_id, interval_id):
+        """Обработчик выбора интервала в диалоге."""
+        print(f"Выбран интервал: trace={trace_id}, interval={interval_id}")
+        # TODO: Реализовать выделение интервала на холсте
+
+    def finish_current_interval_from_menu(self):
+        """Завершает текущий интервал из контекстного меню."""
+        if self.main_window:
+            interval_type = self.main_window.current_interval_type
+            interval = self.finish_current_interval(interval_type)
+
+            if interval and self.main_window.project:
+                self.main_window.project.loose_intervals.append(interval)
+                self.main_window.status_bar.showMessage(
+                    f"Создан интервал: {interval.id} ({interval.type})", 3000)
+                self.main_window.project_updated.emit()

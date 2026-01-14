@@ -182,6 +182,11 @@ class MainWindow(QMainWindow):
                                                 '', 'auto_detect.png')
         self.traces_menu.addAction(auto_detect_action)
 
+        manage_traces_action = self.create_action('Управление трассами...',
+                                                  self.show_trace_manager,
+                                                  'Ctrl+M', 'manage.png')
+        self.traces_menu.addAction(manage_traces_action)
+
         self.traces_menu.addSeparator()
 
         self.interpolate_action = self.create_action('&Интерполировать все',
@@ -280,7 +285,7 @@ class MainWindow(QMainWindow):
         if self.maybe_save():
             self.project = DigitizationProject()
             self.raster_canvas.clear_scene()
-            self.setWindowTitle("Seismogram Digitizer [Новый проект]")
+            self.setWindowTitle("Seismogram Digitizer")
             self.update_project_info()
             self.status_bar.showMessage("Создан новый проект", 3000)
 
@@ -325,7 +330,7 @@ class MainWindow(QMainWindow):
                             dpi=params['dpi'],
                             color_mode=params['color_mode'],
                             use_tiling=True,  # Включаем тайлинг
-                            tile_size=(2048, 2048)  # Размер тайлов
+                            tile_size=(1024, 1024)  # Размер тайлов
                         )
 
                         # Загружаем только метаданные
@@ -516,18 +521,24 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage("Удаление - будет реализовано", 2000)
 
     def create_trace(self):
-        from core.trace_manager import TraceManager
-        from PyQt5.QtWidgets import QInputDialog
+        """Создает новую трассу через диалог управления."""
+        try:
+            # Показываем диалог управления трассами
+            from gui.simple_trace_panel import SimpleTraceDialog
+            dialog = SimpleTraceDialog(self.project, self)
 
-        name, ok = QInputDialog.getText(self, "Создать трассу",
-                                        "Введите имя трассы:")
-        if ok and name:
-            trace_manager = TraceManager(self.project)
-            trace = trace_manager.create_trace(name)
-            self.project.add_trace(trace)
-            self.traces_panel.update_trace_list()
-            self.status_bar.showMessage(f"Создана трасса: {name}", 3000)
-            self.project_updated.emit()
+            # Прямо вызываем добавление трассы через диалог
+            dialog.add_trace()
+
+            # Показываем диалог после создания (опционально)
+            dialog.show()
+
+        except Exception as e:
+            print(f"Ошибка при создании трассы: {e}")
+            import traceback
+            traceback.print_exc()
+            QMessageBox.warning(self, "Ошибка",
+                                f"Не удалось создать трассу:\n{str(e)}")
 
     def auto_detect_traces(self):
         from core.trace_manager import TraceManager
@@ -647,6 +658,35 @@ class MainWindow(QMainWindow):
             event.accept()
         else:
             event.ignore()
+
+    def keyPressEvent(self, event):
+        """Обработка нажатия клавиш."""
+        # Горячие клавиши для управления
+        if event.key() == Qt.Key_T and event.modifiers() & Qt.ControlModifier:
+            # Ctrl+T - создать трассу
+            self.create_trace()
+        elif event.key() == Qt.Key_M and event.modifiers() & Qt.ControlModifier:
+            # Ctrl+M - управление трассами
+            self.show_trace_manager()
+        elif event.key() == Qt.Key_I and event.modifiers() & Qt.ControlModifier:
+            # Ctrl+I - интерполировать все
+            self.interpolate_all()
+        elif event.key() == Qt.Key_Delete:
+            # Delete - очистить текущий интервал
+            if hasattr(self.raster_canvas, 'clear_current_interval'):
+                self.raster_canvas.clear_current_interval()
+        elif event.key() == Qt.Key_Escape:
+            # Esc - сброс
+            if hasattr(self.raster_canvas, 'clear_current_interval'):
+                self.raster_canvas.clear_current_interval()
+        else:
+            super().keyPressEvent(event)
+
+    def show_trace_manager(self):
+        """Показывает диалог управления трассами."""
+        from gui.simple_trace_panel import SimpleTraceDialog
+        dialog = SimpleTraceDialog(self.project, self)
+        dialog.show()
 
     def update_project_info(self):
         """Обновляет информацию о проекте."""
