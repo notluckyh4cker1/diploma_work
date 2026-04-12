@@ -6,7 +6,6 @@ from models.seismic_data import DigitizationPoint, DigitizationInterval
 from utils.interpolation import interpolate_points, regular_digitization
 from utils.corrections import remove_trend, correct_time_irregularity, fix_trace_break
 
-
 class DigitizerEngine:
     """Движок для выполнения операций оцифровки."""
 
@@ -91,34 +90,6 @@ class DigitizerEngine:
             print(f"Ошибка при автоматических коррекциях: {e}")
 
         return amplitude_corrected
-
-    def auto_digitize_trace(self, trace_points: List[Tuple[float, float]],
-                            num_samples: int = 100) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Автоматическая оцифровка трассы по ключевым точкам.
-
-        Args:
-            trace_points: Ключевые точки трассы [(x1, y1), (x2, y2), ...]
-            num_samples: Количество точек для оцифровки
-
-        Returns:
-            Tuple: (координаты X, координаты Y оцифрованной трассы)
-        """
-        if len(trace_points) < 2:
-            raise ValueError("Нужно минимум 2 точки для оцифровки")
-
-        # Преобразуем точки в DigitizationPoint
-        points = [DigitizationPoint(x_px=x, y_px=y) for x, y in trace_points]
-
-        # Интерполируем
-        x_interp, y_interp = interpolate_points(
-            points,
-            polynomial_order=3,
-            num_samples=num_samples,
-            use_spline=True
-        )
-
-        return x_interp, y_interp
 
     def refine_points(self, points: List[DigitizationPoint],
                       search_radius: float = 5.0) -> List[DigitizationPoint]:

@@ -1,6 +1,7 @@
 from PIL.Image import Image
+from PyQt5.QtGui import QPen, QColor
 from PyQt5.QtWidgets import *
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QRectF
 from PyQt5.QtOpenGL import QGLWidget, QGLFormat
 from OpenGL.GL import *
 
@@ -173,6 +174,52 @@ class OpenGLRasterWidget(QGLWidget):
 
             glBindTexture(GL_TEXTURE_2D, 0)
             glDisable(GL_TEXTURE_2D)
+
+            parent = self.parent()
+            if (parent and hasattr(parent, 'selection_mode') and
+                    parent.selection_mode == "trace" and
+                    hasattr(parent, 'drag_start_pos') and
+                    parent.drag_start_pos):
+                # Рисуем прямоугольник выделения поверх всего
+                glMatrixMode(GL_MODELVIEW)
+                glPushMatrix()
+                glLoadIdentity()
+
+                # Отключаем текстуры
+                glDisable(GL_TEXTURE_2D)
+
+                # Полупрозрачный красный цвет
+                glColor4f(1.0, 0.0, 0.0, 0.3)  # RGBA: красный, 30% прозрачность
+
+                # Получаем текущую позицию мыши
+                current_pos = self.mapFromGlobal(QCursor.pos())
+
+                # Вычисляем прямоугольник
+                x1 = min(parent.drag_start_pos.x(), current_pos.x())
+                y1 = min(parent.drag_start_pos.y(), current_pos.y())
+                x2 = max(parent.drag_start_pos.x(), current_pos.x())
+                y2 = max(parent.drag_start_pos.y(), current_pos.y())
+
+                # Рисуем залитый прямоугольник
+                glBegin(GL_QUADS)
+                glVertex2f(x1, y1)
+                glVertex2f(x2, y1)
+                glVertex2f(x2, y2)
+                glVertex2f(x1, y2)
+                glEnd()
+
+                # Контур прямоугольника
+                glColor4f(1.0, 0.0, 0.0, 1.0)  # Непрозрачный красный
+                glLineWidth(2.0)
+                glBegin(GL_LINE_LOOP)
+                glVertex2f(x1, y1)
+                glVertex2f(x2, y1)
+                glVertex2f(x2, y2)
+                glVertex2f(x1, y2)
+                glEnd()
+
+                glEnable(GL_TEXTURE_2D)
+                glPopMatrix()
 
         except Exception as e:
             print(f"Ошибка в paintGL: {e}")
@@ -481,12 +528,32 @@ class OpenGLRasterWidget(QGLWidget):
         event.accept()
 
     def mousePressEvent(self, event):
-        """Обработка нажатия кнопки мыши."""
+        """Обработка нажатия мыши"""
+        parent = self.parent()
+
+        # Если в режиме выделения трассы - обрабатываем выделение
+        if parent and hasattr(parent, 'selection_mode') and parent.selection_mode == "trace":
+            if event.button() == Qt.LeftButton:
+                parent.drag_start_pos = event.pos()
+                print(f"Начало выделения: {parent.drag_start_pos.x()}, {parent.drag_start_pos.y()}")
+            return  # Блокируем панорамирование при выделении
+
+        # В обычном режиме - сохраняем для панорамирования
         self.last_mouse_x = event.x()
         self.last_mouse_y = event.y()
 
     def mouseMoveEvent(self, event):
-        """Обработка движения мыши для панорамирования."""
+        """Обработка движения мыши"""
+        parent = self.parent()
+
+        # Если в режиме выделения трассы - показываем прямоугольник
+        if parent and hasattr(parent, 'selection_mode') and parent.selection_mode == "trace":
+            if hasattr(parent, 'drag_start_pos') and parent.drag_start_pos and event.buttons() & Qt.LeftButton:
+                # Просто обновляем отрисовку для показа прямоугольника
+                self.update()
+            return  # Блокируем панорамирование при выделении
+
+        # В обычном режиме - панорамирование
         if event.buttons() & Qt.LeftButton:
             dx = event.x() - self.last_mouse_x
             dy = event.y() - self.last_mouse_y
@@ -500,6 +567,32 @@ class OpenGLRasterWidget(QGLWidget):
 
         self.last_mouse_x = event.x()
         self.last_mouse_y = event.y()
+
+    def mouseReleaseEvent(self, event):
+        """Обработка отпускания мыши"""
+        parent = self.parent()
+
+        # Если в режиме выделения трассы - завершаем выделение
+        if parent and hasattr(parent, 'selection_mode') and parent.selection_mode == "trace":
+            if event.button() == Qt.LeftButton and hasattr(parent, 'drag_start_pos') and parent.drag_start_pos:
+                current_pos = event.pos()
+                dx = abs(current_pos.x() - parent.drag_start_pos.x())
+                dy = abs(current_pos.y() - parent.drag_start_pos.y())
+
+                if dx > 10 and dy > 10:
+                    x1 = min(parent.drag_start_pos.x(), current_pos.x())
+                    y1 = min(parent.drag_start_pos.y(), current_pos.y())
+                    x2 = max(parent.drag_start_pos.x(), current_pos.x())
+                    y2 = max(parent.drag_start_pos.y(), current_pos.y())
+
+                    bounds = (x1, y1, x2, y2)
+                    parent.finish_trace_selection(bounds)
+                else:
+                    print("Недостаточное перемещение для выделения")
+
+                parent.drag_start_pos = None
+                self.update()  # Обновляем, чтобы убрать прямоугольник выделения
+            return  # Блокируем панорамирование
 
     def zoom_in(self):
         """Увеличивает масштаб."""
@@ -538,6 +631,11 @@ class RasterCanvas(QWidget):
         # OpenGL виджет
         self.gl_widget = OpenGLRasterWidget(self)
         layout.addWidget(self.gl_widget)
+
+        self.selection_mode = None  # Режим выделения (None, "trace", "interval", etc.)
+        self.current_trace = None  # Текущая редактируемая трасса
+        self.drag_start_pos = None  # Начальная позиция для выделения
+        self.current_trace_points = []  # Точки текущей трассы
 
         print("RasterCanvas инициализирован")
 
@@ -591,67 +689,131 @@ class RasterCanvas(QWidget):
         """Возвращает исходный масштаб."""
         self.gl_widget.zoom_original()
 
-    def contextMenuEvent(self, event):
-        """Показывает контекстное меню для управления трассами."""
-        from PyQt5.QtWidgets import QMenu, QAction
+    def start_trace_selection(self, trace):
+        """Включает режим выделения трассы"""
+        try:
+            if trace:
+                # Инициализируем атрибуты если нужно
+                if not hasattr(self, 'selection_mode'):
+                    self.selection_mode = None
+                if not hasattr(self, 'drag_start_pos'):
+                    self.drag_start_pos = None
 
-        menu = QMenu(self)
+                self.selection_mode = "trace"
+                self.current_trace = trace
+                self.setCursor(Qt.CrossCursor)
 
-        # Действия для управления трассами
-        manage_traces_action = QAction("Управление трассами...", self)
-        manage_traces_action.triggered.connect(self.show_trace_manager)
-        menu.addAction(manage_traces_action)
+                print(f"Режим выделения для трассы: {trace.name}")
+                print("Зажмите ЛКМ и проведите для выделения области")
 
-        menu.addSeparator()
+        except Exception as e:
+            print(f"Ошибка в start_trace_selection: {e}")
 
-        # Действия для текущего интервала
-        if hasattr(self, 'points') and len(self.points) > 0:
-            finish_action = QAction("Завершить интервал", self)
-            finish_action.triggered.connect(self.finish_current_interval_from_menu)
-            menu.addAction(finish_action)
+    def mousePressEvent(self, event):
+        """Обработка нажатия мыши"""
+        # Если в режиме выделения трассы - обрабатываем здесь, не передавая дальше
+        if hasattr(self, 'selection_mode') and self.selection_mode == "trace" and event.button() == Qt.LeftButton:
+            self.drag_start_pos = event.pos()
+            print(f"Начало выделения: {self.drag_start_pos.x()}, {self.drag_start_pos.y()}")
+            event.accept()  # Блокируем передачу события в OpenGL виджет
+            return
 
-            clear_action = QAction("Очистить интервал", self)
-            clear_action.triggered.connect(self.clear_current_interval)
-            menu.addAction(clear_action)
+        # Для всех остальных случаев - передаем дальше
+        super().mousePressEvent(event)
 
-            menu.addSeparator()
+    def mouseMoveEvent(self, event):
+        """Обработка движения мыши"""
+        # Если в режиме выделения и зажата ЛКМ - обрабатываем здесь
+        if (hasattr(self, 'selection_mode') and
+                self.selection_mode == "trace" and
+                hasattr(self, 'drag_start_pos') and
+                self.drag_start_pos and
+                event.buttons() & Qt.LeftButton):
 
-        # Навигация
-        fit_action = QAction("Вписать в экран", self)
-        fit_action.triggered.connect(self.fit_to_view)
-        menu.addAction(fit_action)
+            current_pos = event.pos()
+            width = abs(current_pos.x() - self.drag_start_pos.x())
+            height = abs(current_pos.y() - self.drag_start_pos.y())
 
-        zoom_in_action = QAction("Увеличить", self)
-        zoom_in_action.triggered.connect(self.zoom_in)
-        menu.addAction(zoom_in_action)
+            if width > 0 or height > 0:
+                print(f"Выделение области: {width}x{height} пикселей")
 
-        zoom_out_action = QAction("Уменьшить", self)
-        zoom_out_action.triggered.connect(self.zoom_out)
-        menu.addAction(zoom_out_action)
+            event.accept()  # Блокируем передачу события
+            return
 
-        menu.exec_(event.globalPos())
+        super().mouseMoveEvent(event)
 
-    def show_trace_manager(self):
-        """Показывает диалог управления трассами."""
-        if self.main_window and self.main_window.project:
-            from gui.simple_trace_panel import SimpleTraceDialog
-            dialog = SimpleTraceDialog(self.main_window.project, self.main_window)
-            dialog.interval_selected.connect(self.on_interval_selected)
-            dialog.show()
+    def mouseReleaseEvent(self, event):
+        """Обработка отпускания кнопки мыши"""
+        # Если в режиме выделения - обрабатываем здесь
+        if (hasattr(self, 'selection_mode') and
+                self.selection_mode == "trace" and
+                hasattr(self, 'drag_start_pos') and
+                self.drag_start_pos and
+                event.button() == Qt.LeftButton):
 
-    def on_interval_selected(self, trace_id, interval_id):
-        """Обработчик выбора интервала в диалоге."""
-        print(f"Выбран интервал: trace={trace_id}, interval={interval_id}")
-        # TODO: Реализовать выделение интервала на холсте
+            current_pos = event.pos()
+            dx = abs(current_pos.x() - self.drag_start_pos.x())
+            dy = abs(current_pos.y() - self.drag_start_pos.y())
 
-    def finish_current_interval_from_menu(self):
-        """Завершает текущий интервал из контекстного меню."""
-        if self.main_window:
-            interval_type = self.main_window.current_interval_type
-            interval = self.finish_current_interval(interval_type)
+            if dx > 10 and dy > 10:
+                x1 = min(self.drag_start_pos.x(), current_pos.x())
+                y1 = min(self.drag_start_pos.y(), current_pos.y())
+                x2 = max(self.drag_start_pos.x(), current_pos.x())
+                y2 = max(self.drag_start_pos.y(), current_pos.y())
 
-            if interval and self.main_window.project:
-                self.main_window.project.loose_intervals.append(interval)
+                bounds = (x1, y1, x2, y2)
+                self.finish_trace_selection(bounds)
+
+            self.drag_start_pos = None
+            event.accept()  # Блокируем передачу события
+            return
+
+        super().mouseReleaseEvent(event)
+
+    def finish_trace_selection(self, bounds):
+        """Завершает выделение трассы"""
+        try:
+            # Проверяем атрибуты
+            if not hasattr(self, 'current_trace') or self.current_trace is None:
+                print("Нет текущей трассы для завершения выделения")
+                return
+
+            # Обновляем трассу
+            self.current_trace.bounding_box = bounds
+            self.current_trace.is_editing = False
+
+            # Выходим из режима выделения
+            if hasattr(self, 'selection_mode'):
+                self.selection_mode = None
+
+            self.setCursor(Qt.ArrowCursor)
+
+            if hasattr(self, 'drag_start_pos'):
+                self.drag_start_pos = None
+
+            print(f"Трасса '{self.current_trace.name}' выделена в области: {bounds}")
+
+            # Сигнализируем о завершении
+            if hasattr(self, 'main_window') and self.main_window:
                 self.main_window.status_bar.showMessage(
-                    f"Создан интервал: {interval.id} ({interval.type})", 3000)
-                self.main_window.project_updated.emit()
+                    f"Трасса '{self.current_trace.name}' успешно выделена",
+                    5000
+                )
+
+                # Обновляем проект
+                if hasattr(self.main_window, 'project_updated'):
+                    self.main_window.project_updated.emit()
+
+            # Показываем сообщение
+            QMessageBox.information(
+                self,
+                "Готово",
+                f"Трасса '{self.current_trace.name}' успешно выделена.\n"
+                f"Область: {int(bounds[2] - bounds[0])}x{int(bounds[3] - bounds[1])} пикселей"
+            )
+
+            # Сбрасываем текущую трассу
+            self.current_trace = None
+
+        except Exception as e:
+            print(f"Ошибка в finish_trace_selection: {e}")

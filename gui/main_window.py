@@ -10,7 +10,6 @@ from PyQt5.QtGui import QIcon, QPainter
 
 from gui.raster_canvas import RasterCanvas
 from gui.controls_panel import ControlsPanel
-from gui.traces_panel import TracesPanel
 from core.project import DigitizationProject
 from models import RasterOrientation
 from models.raster_data import SeismogramRaster
@@ -193,11 +192,6 @@ class MainWindow(QMainWindow):
                                                      self.interpolate_all,
                                                      'Ctrl+P', 'interpolate.png')
         self.traces_menu.addAction(self.interpolate_action)
-
-        self.correct_trend_action = self.create_action('Устранить &тренд',
-                                                       self.correct_trend,
-                                                       'Ctrl+R', 'correction.png')
-        self.traces_menu.addAction(self.correct_trend_action)
 
         # Меню "Инструменты"
         tools_menu = menubar.addMenu('&Инструменты')
@@ -521,24 +515,89 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage("Удаление - будет реализовано", 2000)
 
     def create_trace(self):
-        """Создает новую трассу через диалог управления."""
+        """Создает новую трассу - простой вариант без немедленного выделения"""
+        if not self.project.raster:
+            QMessageBox.warning(self, "Предупреждение",
+                                "Сначала загрузите сейсмограмму через меню 'Файл → Импорт растра'")
+            return
+
         try:
-            # Показываем диалог управления трассами
-            from gui.simple_trace_panel import SimpleTraceDialog
-            dialog = SimpleTraceDialog(self.project, self)
+            # Простой диалог для ввода названия трассы
+            from PyQt5.QtWidgets import QInputDialog, QLineEdit
+            from models.trace import Trace
 
-            # Прямо вызываем добавление трассы через диалог
-            dialog.add_trace()
+            # Генерируем предложение для названия
+            default_name = f"Трасса {len(self.project.traces) + 1}"
 
-            # Показываем диалог после создания (опционально)
-            dialog.show()
+            # Запрашиваем название у пользователя
+            name, ok = QInputDialog.getText(
+                self,
+                "Создание трассы",
+                "Введите название трассы:",
+                QLineEdit.Normal,
+                default_name
+            )
+
+            if ok and name.strip():
+                # Создаем объект трассы
+                new_trace = Trace(name=name.strip())
+
+                # Инициализируем необходимые атрибуты
+                new_trace.intervals = []
+                new_trace.is_editing = False
+                new_trace.bounding_box = None
+
+                # Добавляем трассу в проект
+                if hasattr(self.project, 'add_trace'):
+                    self.project.add_trace(new_trace)
+                else:
+                    # Если метода add_trace нет, добавляем напрямую
+                    if not hasattr(self.project, 'traces'):
+                        self.project.traces = []
+                    self.project.traces.append(new_trace)
+
+                # Обновляем интерфейс
+                self.project_updated.emit()
+
+                # Показываем сообщение об успехе
+                self.status_bar.showMessage(f"Создана трасса: {name.strip()}", 3000)
+
+                # Открываем диалог управления трассами для дальнейших действий
+                self.show_trace_manager()
 
         except Exception as e:
-            print(f"Ошибка при создании трассы: {e}")
+            QMessageBox.critical(self, "Ошибка",
+                                 f"Не удалось создать трассу:\n{str(e)}")
             import traceback
             traceback.print_exc()
-            QMessageBox.warning(self, "Ошибка",
-                                f"Не удалось создать трассу:\n{str(e)}")
+
+    def show_trace_manager(self):
+        """Показывает диалог управления трассами"""
+        if not self.project.raster:
+            QMessageBox.warning(self, "Предупреждение",
+                                "Сначала загрузите сейсмограмму через меню 'Файл → Импорт растра'")
+            return
+
+        from gui.dialogs.trace_manager_dialog import TraceManagerDialog
+        dialog = TraceManagerDialog(self.project, self)
+
+        # Подключаем сигналы
+        dialog.trace_created.connect(self.on_trace_created)
+        dialog.start_trace_selection.connect(self.start_trace_selection_mode)
+
+        dialog.exec_()
+
+    def start_trace_selection_mode(self, trace):
+        """Включает режим выделения трассы на холсте"""
+        self.current_trace = trace
+        if self.raster_canvas:
+            # Просто активируем режим, без изменения масштаба
+            self.raster_canvas.start_trace_selection(trace)
+            self.status_bar.showMessage(f"Режим выделения трассы: {trace.name}. Выделите область на изображении")
+
+    def on_trace_created(self, trace):
+        """Обработка создания трассы"""
+        self.project_updated.emit()
 
     def auto_detect_traces(self):
         from core.trace_manager import TraceManager
@@ -579,19 +638,6 @@ class MainWindow(QMainWindow):
             f"Интерполировано {success_count} из {total_count} интервалов",
             3000)
         self.project_updated.emit()
-
-    def correct_trend(self):
-        if not self.project.traces:
-            QMessageBox.warning(self, "Предупреждение", "Нет трасс для обработки")
-            return
-
-        from PyQt5.QtWidgets import QMessageBox
-        reply = QMessageBox.question(self, "Коррекция тренда",
-                                     "Удалить линейный тренд из всех интервалов?",
-                                     QMessageBox.Yes | QMessageBox.No)
-
-        if reply == QMessageBox.Yes:
-            self.status_bar.showMessage("Коррекция тренда - будет реализовано", 3000)
 
     def zoom_in(self):
         if hasattr(self.raster_canvas, 'zoom_in'):
@@ -681,12 +727,6 @@ class MainWindow(QMainWindow):
                 self.raster_canvas.clear_current_interval()
         else:
             super().keyPressEvent(event)
-
-    def show_trace_manager(self):
-        """Показывает диалог управления трассами."""
-        from gui.simple_trace_panel import SimpleTraceDialog
-        dialog = SimpleTraceDialog(self.project, self)
-        dialog.show()
 
     def update_project_info(self):
         """Обновляет информацию о проекте."""
