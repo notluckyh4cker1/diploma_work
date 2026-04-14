@@ -20,6 +20,7 @@ class RasterCanvas(QGraphicsView):
         self.mode = 'pan'  # pan, add_point, delete_point, move_point, digitize
 
         # Данные оцифровки
+        self.current_project = None
         self.current_trace = None
         self.current_interval = None
 
@@ -313,19 +314,33 @@ class RasterCanvas(QGraphicsView):
             if item != self.pixmap_item:
                 self.scene.removeItem(item)
 
-        # Рисуем трассы
-        if self.current_trace and self.current_trace.is_visible:
-            for interval in self.current_trace.intervals:
-                if interval and interval.points:
-                    self.draw_interval(interval)
-
-        # Рисуем другие видимые трассы
-        if hasattr(self.current_trace, 'project') and self.current_trace.project:
-            for trace in self.current_trace.project.traces:
-                if trace != self.current_trace and trace.is_visible:
-                    for interval in trace.intervals:
+        # Рисуем ВСЕ видимые трассы из проекта
+        if hasattr(self, 'current_trace') and self.current_trace:
+            # Если есть активная трасса - рисуем её и все видимые из проекта
+            if hasattr(self.current_trace, 'project') and self.current_trace.project:
+                for trace in self.current_trace.project.traces:
+                    if trace.is_visible:
+                        for interval in trace.intervals:
+                            if interval and interval.points:
+                                # Разный цвет для активной и неактивной трассы
+                                if trace == self.current_trace:
+                                    self.draw_interval(interval, color=QColor(255, 50, 50))
+                                else:
+                                    self.draw_interval(interval, color=QColor(255, 215, 0))
+            else:
+                # Если нет проекта, но есть текущая трасса
+                if self.current_trace and self.current_trace.is_visible:
+                    for interval in self.current_trace.intervals:
                         if interval and interval.points:
-                            self.draw_interval(interval, color=QColor(150, 150, 150))
+                            self.draw_interval(interval)
+        else:
+            # Нет активной трассы - рисуем ВСЕ видимые трассы из проекта
+            if hasattr(self, 'current_project') and self.current_project:
+                for trace in self.current_project.traces:
+                    if trace.is_visible:
+                        for interval in trace.intervals:
+                            if interval and interval.points:
+                                self.draw_interval(interval, color=QColor(255, 50, 50))  # Синий цвет для обзора
 
     def draw_interval(self, interval, color=None):
         """Нарисовать интервал"""

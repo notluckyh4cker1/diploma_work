@@ -14,7 +14,7 @@ class ControlsPanel(QWidget):
     finish_interval_requested = pyqtSignal()
     manage_traces_requested = pyqtSignal()
     finish_trace_requested = pyqtSignal()
-    trace_selected = pyqtSignal(object)  # Сигнал выбора трассы (None - все трассы)
+    show_visibility_requested = pyqtSignal()
 
     def __init__(self):
         super().__init__()
@@ -27,7 +27,7 @@ class ControlsPanel(QWidget):
         pan_group = QGroupBox("Навигация")
         pan_layout = QVBoxLayout()
 
-        self.pan_mode_btn = QPushButton("🔍 Режим панорамирования")
+        self.pan_mode_btn = QPushButton("Режим панорамирования")
         self.pan_mode_btn.setStyleSheet("""
             QPushButton {
                 background-color: #4CAF50;
@@ -56,7 +56,7 @@ class ControlsPanel(QWidget):
         digitize_group = QGroupBox("Оцифровка")
         digitize_layout = QVBoxLayout()
 
-        self.digitize_mode_btn = QPushButton("✏️ Режим оцифровки")
+        self.digitize_mode_btn = QPushButton("Режим оцифровки")
         self.digitize_mode_btn.setStyleSheet("""
             QPushButton {
                 background-color: #2196F3;
@@ -74,19 +74,19 @@ class ControlsPanel(QWidget):
 
         digitize_layout.addWidget(QLabel("Инструменты оцифровки"))
 
-        self.add_point_btn = QPushButton("➕ Добавить точку")
+        self.add_point_btn = QPushButton("Добавить точку")
         self.add_point_btn.clicked.connect(lambda: self.mode_changed.emit('add_point'))
         digitize_layout.addWidget(self.add_point_btn)
 
-        self.delete_point_btn = QPushButton("❌ Удалить точку")
+        self.delete_point_btn = QPushButton("Удалить точку")
         self.delete_point_btn.clicked.connect(lambda: self.mode_changed.emit('delete_point'))
         digitize_layout.addWidget(self.delete_point_btn)
 
-        self.move_point_btn = QPushButton("✏️ Переместить точку")
+        self.move_point_btn = QPushButton("Переместить точку")
         self.move_point_btn.clicked.connect(lambda: self.mode_changed.emit('move_point'))
         digitize_layout.addWidget(self.move_point_btn)
 
-        self.finish_interval_btn = QPushButton("✅ Завершить текущую линию")
+        self.finish_interval_btn = QPushButton("Завершить текущую линию")
         self.finish_interval_btn.clicked.connect(self.finish_interval_requested.emit)
         digitize_layout.addWidget(self.finish_interval_btn)
 
@@ -97,11 +97,11 @@ class ControlsPanel(QWidget):
         control_group = QGroupBox("Управление")
         control_layout = QVBoxLayout()
 
-        self.undo_btn = QPushButton("↩️ Отменить (Ctrl+Z)")
+        self.undo_btn = QPushButton("Отменить (Ctrl+Z)")
         self.undo_btn.clicked.connect(self.undo_requested.emit)
         control_layout.addWidget(self.undo_btn)
 
-        self.redo_btn = QPushButton("↪️ Вернуть (Ctrl+Y)")
+        self.redo_btn = QPushButton("Вернуть (Ctrl+Y)")
         self.redo_btn.clicked.connect(self.redo_requested.emit)
         control_layout.addWidget(self.redo_btn)
 
@@ -112,11 +112,11 @@ class ControlsPanel(QWidget):
         process_group = QGroupBox("Обработка")
         process_layout = QVBoxLayout()
 
-        self.interpolate_btn = QPushButton("📈 Интерполяция")
+        self.interpolate_btn = QPushButton("Интерполяция")
         self.interpolate_btn.clicked.connect(self.interpolate_requested.emit)
         process_layout.addWidget(self.interpolate_btn)
 
-        self.trend_btn = QPushButton("📉 Удалить тренд")
+        self.trend_btn = QPushButton("Удалить тренд")
         self.trend_btn.clicked.connect(self.remove_trend_requested.emit)
         process_layout.addWidget(self.trend_btn)
 
@@ -127,17 +127,15 @@ class ControlsPanel(QWidget):
         traces_group = QGroupBox("Трассы")
         traces_layout = QVBoxLayout()
 
-        traces_layout.addWidget(QLabel("Отображение:"))
-        self.trace_selector = QComboBox()
-        self.trace_selector.addItem("📊 Все трассы", None)  # Добавляем пункт "Все трассы"
-        self.trace_selector.currentIndexChanged.connect(self.on_trace_selected)
-        traces_layout.addWidget(self.trace_selector)
+        self.show_visibility_btn = QPushButton("Отображение трасс")
+        self.show_visibility_btn.clicked.connect(self.show_visibility_requested.emit)
+        traces_layout.addWidget(self.show_visibility_btn)
 
-        self.manage_traces_btn = QPushButton("📋 Управление трассами")
+        self.manage_traces_btn = QPushButton("Управление трассами")
         self.manage_traces_btn.clicked.connect(self.manage_traces_requested)
         traces_layout.addWidget(self.manage_traces_btn)
 
-        self.finish_trace_btn = QPushButton("🏁 Завершить текущую трассу")
+        self.finish_trace_btn = QPushButton("Завершить текущую трассу")
         self.finish_trace_btn.clicked.connect(self.finish_trace_requested)
         traces_layout.addWidget(self.finish_trace_btn)
 
@@ -171,37 +169,3 @@ class ControlsPanel(QWidget):
         self.delete_point_btn.setEnabled(enabled)
         self.move_point_btn.setEnabled(enabled)
         self.finish_interval_btn.setEnabled(enabled)
-
-    def update_trace_selector(self, traces, current_trace_id=None):
-        """Обновить выпадающий список трасс"""
-        self.trace_selector.blockSignals(True)
-
-        self.trace_selector.clear()
-        self.trace_selector.addItem("📊 Все трассы", None)
-
-        for trace in traces:
-            icon = "👁️" if trace.is_visible else "🚫"
-            self.trace_selector.addItem(f"{icon} {trace.name}", trace.id)
-
-        # Восстанавливаем выбор
-        if current_trace_id:
-            index = self.trace_selector.findData(current_trace_id)
-            if index >= 0:
-                self.trace_selector.setCurrentIndex(index)
-        else:
-            self.trace_selector.setCurrentIndex(0)  # "Все трассы" по умолчанию
-
-        self.trace_selector.blockSignals(False)
-
-    def on_trace_selected(self, index):
-        """Обработка выбора трассы"""
-        if index < 0:
-            return
-
-        trace_id = self.trace_selector.itemData(index)
-        self.trace_selected.emit(trace_id)
-
-    def get_selected_trace_id(self):
-        """Получить ID выбранной трассы"""
-        current_data = self.trace_selector.currentData()
-        return current_data
