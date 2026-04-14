@@ -1,6 +1,6 @@
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QTableWidget,
                              QTableWidgetItem, QPushButton, QHeaderView,
-                             QMessageBox, QWidget, QLabel, QFrame, QComboBox)
+                             QMessageBox, QWidget, QLabel, QFrame)
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QBrush
 import uuid
@@ -9,7 +9,7 @@ import uuid
 class TraceManagerDialog(QDialog):
     """Диалог управления трассами"""
 
-    start_trace_selection = pyqtSignal(object)  # Сигнал для начала выделения трассы
+    trace_selected_for_editing = pyqtSignal(object)  # Сигнал для выбора трассы для оцифровки
 
     def __init__(self, project, parent=None):
         super().__init__(parent)
@@ -24,33 +24,12 @@ class TraceManagerDialog(QDialog):
         """Настройка интерфейса"""
         layout = QVBoxLayout(self)
 
-        # Верхняя панель с выбором трассы
-        top_panel = QWidget()
-        top_layout = QHBoxLayout(top_panel)
-        top_layout.setContentsMargins(0, 5, 0, 5)
-
-        top_layout.addWidget(QLabel("Работа с трассой:"))
-
-        self.trace_selector = QComboBox()
-        self.trace_selector.setMinimumWidth(200)
-        self.trace_selector.currentIndexChanged.connect(self.on_trace_selected)
-        top_layout.addWidget(self.trace_selector)
-
-        top_layout.addStretch()
-        layout.addWidget(top_panel)
-
-        # Разделитель
-        line1 = QFrame()
-        line1.setFrameShape(QFrame.HLine)
-        line1.setFrameShadow(QFrame.Sunken)
-        layout.addWidget(line1)
-
         # Информационная метка
         info_label = QLabel("Список сейсмических трасс в проекте:")
         info_label.setStyleSheet("font-weight: bold; padding: 5px;")
         layout.addWidget(info_label)
 
-        # Таблица трасс (без колонки видимости)
+        # Таблица трасс
         self.table = QTableWidget()
         self.table.setColumnCount(4)
         self.table.setHorizontalHeaderLabels(["Название", "ID", "Интервалы", "Точки"])
@@ -65,43 +44,44 @@ class TraceManagerDialog(QDialog):
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setSelectionMode(QTableWidget.SingleSelection)
         self.table.setAlternatingRowColors(True)
-        self.table.itemSelectionChanged.connect(self.on_table_selection_changed)
 
         layout.addWidget(self.table)
 
         # Разделитель
-        line2 = QFrame()
-        line2.setFrameShape(QFrame.HLine)
-        line2.setFrameShadow(QFrame.Sunken)
-        layout.addWidget(line2)
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setFrameShadow(QFrame.Sunken)
+        layout.addWidget(line)
 
         # Панель кнопок управления
-        panel1 = QWidget()
-        panel1_layout = QHBoxLayout(panel1)
-        panel1_layout.setContentsMargins(0, 5, 0, 5)
+        panel = QWidget()
+        panel_layout = QHBoxLayout(panel)
+        panel_layout.setContentsMargins(0, 5, 0, 5)
 
         self.add_trace_btn = QPushButton("Новая трасса")
         self.add_trace_btn.clicked.connect(self.add_trace)
-        panel1_layout.addWidget(self.add_trace_btn)
+        panel_layout.addWidget(self.add_trace_btn)
 
         self.edit_trace_btn = QPushButton("Редактировать")
         self.edit_trace_btn.clicked.connect(self.edit_trace)
-        panel1_layout.addWidget(self.edit_trace_btn)
+        panel_layout.addWidget(self.edit_trace_btn)
 
         self.delete_trace_btn = QPushButton("Удалить")
         self.delete_trace_btn.clicked.connect(self.delete_trace)
-        panel1_layout.addWidget(self.delete_trace_btn)
+        panel_layout.addWidget(self.delete_trace_btn)
 
-        panel1_layout.addStretch()
+        layout.addWidget(panel)
 
-        layout.addWidget(panel1)
-
-        # Нижняя панель (кнопки диалога)
+        # Нижняя панель
         bottom_panel = QWidget()
         bottom_layout = QHBoxLayout(bottom_panel)
         bottom_layout.setContentsMargins(0, 5, 0, 5)
 
         bottom_layout.addStretch()
+
+        self.refresh_btn = QPushButton("Обновить")
+        self.refresh_btn.clicked.connect(self.load_traces)
+        bottom_layout.addWidget(self.refresh_btn)
 
         self.close_btn = QPushButton("Закрыть")
         self.close_btn.clicked.connect(self.accept)
@@ -110,16 +90,11 @@ class TraceManagerDialog(QDialog):
         layout.addWidget(bottom_panel)
 
     def load_traces(self):
-        """Загрузить список трасс в таблицу и в селектор"""
+        """Загрузить список трасс в таблицу"""
         self.table.setRowCount(0)
-        self.trace_selector.clear()
 
         if not self.project or not self.project.traces:
-            self.trace_selector.addItem("Нет трасс", None)
             return
-
-        for trace in self.project.traces:
-            self.trace_selector.addItem(trace.name, trace.id)
 
         for row, trace in enumerate(self.project.traces):
             self.table.insertRow(row)
@@ -129,7 +104,7 @@ class TraceManagerDialog(QDialog):
             name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
             self.table.setItem(row, 0, name_item)
 
-            # ID трассы (укороченный для отображения)
+            # ID трассы
             short_id = trace.id[:8] + "..." if len(trace.id) > 8 else trace.id
             id_item = QTableWidgetItem(short_id)
             id_item.setToolTip(trace.id)
@@ -160,28 +135,6 @@ class TraceManagerDialog(QDialog):
             trace_id = self.table.item(current_row, 0).data(Qt.UserRole)
             return self.project.get_trace(trace_id)
         return None
-
-    def on_trace_selected(self, index):
-        """Выбор трассы из выпадающего списка"""
-        trace_id = self.trace_selector.currentData()
-        if trace_id:
-            trace = self.project.get_trace(trace_id)
-            if trace:
-                # Выделяем строку в таблице
-                for row in range(self.table.rowCount()):
-                    if self.table.item(row, 0).data(Qt.UserRole) == trace_id:
-                        self.table.selectRow(row)
-                        break
-
-    def on_table_selection_changed(self):
-        """При выборе строки в таблице - обновляем выпадающий список"""
-        trace = self.get_selected_trace()
-        if trace:
-            index = self.trace_selector.findData(trace.id)
-            if index >= 0:
-                self.trace_selector.blockSignals(True)
-                self.trace_selector.setCurrentIndex(index)
-                self.trace_selector.blockSignals(False)
 
     def add_trace(self):
         """Добавить новую трассу"""
@@ -259,8 +212,8 @@ class TraceManagerDialog(QDialog):
 
             QMessageBox.information(self, "Успех", f"Трасса '{trace.name}' удалена")
 
-    def start_editing(self):
-        """Начать редактирование выбранной трассы"""
+    def select_for_editing(self):
+        """Выбрать трассу для оцифровки"""
         trace = self.get_selected_trace()
         if not trace:
             QMessageBox.warning(self, "Ошибка", "Выберите трассу для оцифровки")
@@ -270,9 +223,5 @@ class TraceManagerDialog(QDialog):
             QMessageBox.warning(self, "Ошибка", "Сначала загрузите растер")
             return
 
-        self.start_trace_selection.emit(trace)
+        self.trace_selected_for_editing.emit(trace)
         self.accept()
-
-    def refresh(self):
-        """Обновить таблицу"""
-        self.load_traces()

@@ -45,6 +45,7 @@ class MainWindow(QMainWindow):
         self.controls_panel.remove_trend_requested.connect(self.remove_trend_current_interval)
         self.controls_panel.finish_interval_requested.connect(self.finish_current_interval)
         self.controls_panel.manage_traces_requested.connect(self.show_trace_manager)
+        self.controls_panel.select_trace_requested.connect(self.on_select_trace)
         self.controls_panel.finish_trace_requested.connect(self.finish_current_trace)
         self.controls_panel.show_visibility_requested.connect(self.show_visibility_dialog)
 
@@ -177,6 +178,9 @@ class MainWindow(QMainWindow):
             self.canvas.current_interval = None
             self.canvas.update_display()
 
+            # Обновляем селектор трасс
+            self.controls_panel.update_trace_selector(self.current_project.traces, None)
+
             self.statusbar.showMessage(f"Загружен проект: {self.current_project.name}")
 
     def save_project(self):
@@ -264,6 +268,27 @@ class MainWindow(QMainWindow):
         """Обновление отображения координат"""
         self.coord_label.setText(f"Координаты: ({x:.1f}, {y:.1f})")
 
+    def on_select_trace(self, trace_id):
+        """Выбрать трассу для работы (без включения режима оцифровки)"""
+        if not self.current_project:
+            QMessageBox.warning(self, "Ошибка", "Сначала создайте или откройте проект")
+            return
+
+        trace = self.current_project.get_trace(trace_id)
+        if not trace:
+            return
+
+        # Скрываем все трассы, показываем только выбранную
+        for t in self.current_project.traces:
+            t.is_visible = (t.id == trace_id)
+
+        # Устанавливаем текущую трассу
+        self.canvas.set_current_trace(trace)
+        self.canvas.update_display()
+
+        # Обновляем селектор
+        self.controls_panel.set_selected_trace(trace_id)
+
     def on_mode_changed(self, mode: str):
         """Обработка смены режима"""
         if mode == 'digitize':
@@ -303,9 +328,23 @@ class MainWindow(QMainWindow):
 
         from gui.dialogs.trace_manager_dialog import TraceManagerDialog
         dialog = TraceManagerDialog(self.current_project, self)
+        dialog.trace_selected_for_editing.connect(self.on_trace_selected_for_editing)
         dialog.exec_()
+
+    def on_trace_selected_for_editing(self, trace):
+        """Обработка выбора трассы для оцифровки из менеджера"""
+        # Скрываем все трассы, показываем только выбранную
+        for t in self.current_project.traces:
+            t.is_visible = (t.id == trace.id)
+
+        # Устанавливаем текущую трассу
+        self.canvas.set_current_trace(trace)
         self.canvas.update_display()
-        self.statusbar.showMessage("Управление трассами завершено")
+
+        # Обновляем селектор
+        self.controls_panel.set_selected_trace(trace.id)
+
+        self.statusbar.showMessage(f"Выбрана трасса для оцифровки: {trace.name}")
 
     def show_visibility_dialog(self):
         """Показать диалог управления видимостью трасс"""

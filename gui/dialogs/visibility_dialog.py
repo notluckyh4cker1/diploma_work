@@ -55,11 +55,11 @@ class VisibilityDialog(QDialog):
         button_layout = QHBoxLayout(button_panel)
         button_layout.setContentsMargins(0, 5, 0, 5)
 
-        self.show_all_btn = QPushButton("✅ Показать все")
+        self.show_all_btn = QPushButton("Показать все")
         self.show_all_btn.clicked.connect(self.show_all)
         button_layout.addWidget(self.show_all_btn)
 
-        self.hide_all_btn = QPushButton("❌ Скрыть все")
+        self.hide_all_btn = QPushButton("Скрыть все")
         self.hide_all_btn.clicked.connect(self.hide_all)
         button_layout.addWidget(self.hide_all_btn)
 
