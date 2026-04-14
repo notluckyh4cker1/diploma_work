@@ -1,249 +1,365 @@
-from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
-                             QTableWidget, QTableWidgetItem, QLabel,
-                             QLineEdit, QHeaderView, QMessageBox, QInputDialog,
-                             QDialogButtonBox, QMenu)
+from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QTableWidget,
+                             QTableWidgetItem, QPushButton, QHeaderView,
+                             QMessageBox, QWidget, QLabel, QFrame)
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QBrush
-from models.trace import Trace
+import uuid
 
 
 class TraceManagerDialog(QDialog):
-    """Диалоговое окно управления трассами"""
+    """Диалог управления трассами"""
 
-    # Сигналы
-    trace_selected = pyqtSignal(object)  # Выбрана трасса для просмотра
-    trace_created = pyqtSignal(object)  # Создана новая трасса
-    start_trace_selection = pyqtSignal(object)  # Начать выделение трассы
+    start_trace_selection = pyqtSignal(object)  # Сигнал для начала выделения трассы
+    trace_visibility_changed = pyqtSignal()  # Сигнал об изменении видимости
 
     def __init__(self, project, parent=None):
         super().__init__(parent)
         self.project = project
-        self.current_trace = None
         self.setWindowTitle("Управление трассами")
-        self.resize(600, 400)
+        self.setMinimumSize(700, 500)
 
-        self.init_ui()
-        self.update_table()
+        self.setup_ui()
+        self.load_traces()
 
-    def init_ui(self):
-        layout = QVBoxLayout()
+    def setup_ui(self):
+        """Настройка интерфейса"""
+        layout = QVBoxLayout(self)
 
-        # Заголовок
-        title_label = QLabel("Список трасс")
-        title_label.setStyleSheet("font-weight: bold; font-size: 14px; margin-bottom: 10px;")
-        layout.addWidget(title_label)
+        # Информационная метка
+        info_label = QLabel("Список сейсмических трасс в проекте:")
+        info_label.setStyleSheet("font-weight: bold; padding: 5px;")
+        layout.addWidget(info_label)
 
         # Таблица трасс
         self.table = QTableWidget()
-        self.table.setColumnCount(4)
-        self.table.setHorizontalHeaderLabels(["Название", "Состояние", "Интервалов", "Область"])
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.table.setColumnCount(5)
+        self.table.setHorizontalHeaderLabels(["Название", "ID", "Интервалы", "Точки", "Видимость"])
 
-        # Подключаем двойной клик
-        self.table.cellDoubleClicked.connect(self.on_cell_double_clicked)
-        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.table.customContextMenuRequested.connect(self.show_context_menu)
+        # Настройка таблицы
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SingleSelection)
+        self.table.setAlternatingRowColors(True)
 
         layout.addWidget(self.table)
 
-        # Кнопки управления
-        btn_layout = QHBoxLayout()
+        # Разделитель
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setFrameShadow(QFrame.Sunken)
+        layout.addWidget(line)
 
-        # Кнопка создания
-        self.create_btn = QPushButton("Создать трассу")
-        self.create_btn.clicked.connect(self.create_trace_dialog)
-        self.create_btn.setToolTip("Создать новую трассу")
-        btn_layout.addWidget(self.create_btn)
+        # Первая панель кнопок (управление трассами)
+        panel1 = QWidget()
+        panel1_layout = QHBoxLayout(panel1)
+        panel1_layout.setContentsMargins(0, 5, 0, 5)
 
-        # Кнопка выделения
-        self.select_btn = QPushButton("Выделить трассу")
-        self.select_btn.clicked.connect(self.select_trace_for_digitization)
-        self.select_btn.setEnabled(False)
-        self.select_btn.setToolTip("Выделить выбранную трассу на изображении")
-        btn_layout.addWidget(self.select_btn)
+        self.add_trace_btn = QPushButton("➕ Новая трасса")
+        self.add_trace_btn.clicked.connect(self.add_trace)
+        panel1_layout.addWidget(self.add_trace_btn)
 
-        # Кнопка удаления
-        self.delete_btn = QPushButton("Удалить")
-        self.delete_btn.clicked.connect(self.delete_selected_trace)
-        self.delete_btn.setEnabled(False)
-        btn_layout.addWidget(self.delete_btn)
+        self.edit_trace_btn = QPushButton("✏️ Редактировать")
+        self.edit_trace_btn.clicked.connect(self.edit_trace)
+        panel1_layout.addWidget(self.edit_trace_btn)
 
-        layout.addLayout(btn_layout)
+        self.delete_trace_btn = QPushButton("🗑️ Удалить")
+        self.delete_trace_btn.clicked.connect(self.delete_trace)
+        panel1_layout.addWidget(self.delete_trace_btn)
 
-        # Кнопки диалога
-        button_box = QDialogButtonBox(QDialogButtonBox.Close)
-        button_box.rejected.connect(self.reject)
-        layout.addWidget(button_box)
+        panel1_layout.addStretch()
 
-        self.setLayout(layout)
+        self.start_edit_btn = QPushButton("🎯 Начать оцифровку")
+        self.start_edit_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                font-weight: bold;
+                padding: 5px 15px;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
+        """)
+        self.start_edit_btn.clicked.connect(self.start_editing)
+        panel1_layout.addWidget(self.start_edit_btn)
 
-    def update_table(self):
-        """Обновляет таблицу трасс"""
-        self.table.setRowCount(len(self.project.traces))
+        layout.addWidget(panel1)
+
+        # Вторая панель кнопок (управление видимостью)
+        panel2 = QWidget()
+        panel2_layout = QHBoxLayout(panel2)
+        panel2_layout.setContentsMargins(0, 5, 0, 5)
+
+        # Кнопки для работы с видимостью (все статические)
+        self.hide_selected_btn = QPushButton("👁️ Скрыть выбранную")
+        self.hide_selected_btn.clicked.connect(self.hide_selected_trace)
+        panel2_layout.addWidget(self.hide_selected_btn)
+
+        self.show_selected_btn = QPushButton("👁️ Показать выбранную")
+        self.show_selected_btn.clicked.connect(self.show_selected_trace)
+        panel2_layout.addWidget(self.show_selected_btn)
+
+        panel2_layout.addStretch()
+
+        self.hide_all_btn = QPushButton("🚫 Скрыть все")
+        self.hide_all_btn.clicked.connect(self.hide_all_traces)
+        panel2_layout.addWidget(self.hide_all_btn)
+
+        self.show_all_btn = QPushButton("✅ Показать все")
+        self.show_all_btn.clicked.connect(self.show_all_traces)
+        panel2_layout.addWidget(self.show_all_btn)
+
+        layout.addWidget(panel2)
+
+        # Третья панель (кнопки диалога)
+        panel3 = QWidget()
+        panel3_layout = QHBoxLayout(panel3)
+        panel3_layout.setContentsMargins(0, 5, 0, 5)
+
+        panel3_layout.addStretch()
+
+        self.refresh_btn = QPushButton("🔄 Обновить")
+        self.refresh_btn.clicked.connect(self.load_traces)
+        panel3_layout.addWidget(self.refresh_btn)
+
+        self.close_btn = QPushButton("Закрыть")
+        self.close_btn.clicked.connect(self.accept)
+        panel3_layout.addWidget(self.close_btn)
+
+        layout.addWidget(panel3)
+
+    def load_traces(self):
+        """Загрузить список трасс в таблицу"""
+        self.table.setRowCount(0)
+
+        if not self.project or not self.project.traces:
+            return
 
         for row, trace in enumerate(self.project.traces):
-            # Название
+            self.table.insertRow(row)
+
+            # Название трассы
             name_item = QTableWidgetItem(trace.name)
-            name_item.setData(Qt.UserRole, trace)
+            name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
             self.table.setItem(row, 0, name_item)
 
-            # Состояние
-            if getattr(trace, 'is_editing', False):
-                status = "Редактируется"
-                color = QColor(255, 200, 200)  # Светло-красный
-            elif getattr(trace, 'intervals', []):
-                status = "Оцифрована"
-                color = QColor(200, 255, 200)  # Светло-зеленый
-            else:
-                status = "Новая"
-                color = QColor(240, 240, 240)  # Серый
-
-            status_item = QTableWidgetItem(status)
-            status_item.setBackground(QBrush(color))
-            self.table.setItem(row, 1, status_item)
+            # ID трассы (укороченный для отображения)
+            short_id = trace.id[:8] + "..." if len(trace.id) > 8 else trace.id
+            id_item = QTableWidgetItem(short_id)
+            id_item.setToolTip(trace.id)
+            id_item.setFlags(id_item.flags() & ~Qt.ItemIsEditable)
+            self.table.setItem(row, 1, id_item)
 
             # Количество интервалов
-            intervals = getattr(trace, 'intervals', [])
-            count_item = QTableWidgetItem(str(len(intervals)))
-            count_item.setTextAlignment(Qt.AlignCenter)
-            self.table.setItem(row, 2, count_item)
+            intervals_count = len(trace.intervals)
+            intervals_item = QTableWidgetItem(str(intervals_count))
+            intervals_item.setTextAlignment(Qt.AlignCenter)
+            intervals_item.setFlags(intervals_item.flags() & ~Qt.ItemIsEditable)
+            self.table.setItem(row, 2, intervals_item)
 
-            # Область
-            if hasattr(trace, 'bounding_box') and trace.bounding_box:
-                x1, y1, x2, y2 = trace.bounding_box
-                area_item = QTableWidgetItem(f"{int(x2 - x1)}x{int(y2 - y1)}")
+            # Количество точек
+            total_points = sum(len(interval.points) for interval in trace.intervals)
+            points_item = QTableWidgetItem(str(total_points))
+            points_item.setTextAlignment(Qt.AlignCenter)
+            points_item.setFlags(points_item.flags() & ~Qt.ItemIsEditable)
+            self.table.setItem(row, 3, points_item)
+
+            # Видимость
+            visible_text = "✓ Видима" if trace.is_visible else "✗ Скрыта"
+            visible_item = QTableWidgetItem(visible_text)
+            visible_item.setTextAlignment(Qt.AlignCenter)
+            visible_item.setFlags(visible_item.flags() & ~Qt.ItemIsEditable)
+
+            # Цвет для видимости
+            if trace.is_visible:
+                visible_item.setBackground(QBrush(QColor(200, 255, 200)))
             else:
-                area_item = QTableWidgetItem("Не выделена")
-            area_item.setTextAlignment(Qt.AlignCenter)
-            self.table.setItem(row, 3, area_item)
+                visible_item.setBackground(QBrush(QColor(255, 200, 200)))
 
-        # Выделяем первую строку, если есть трассы
-        if self.table.rowCount() > 0:
-            self.table.selectRow(0)
-            self.update_buttons_state()
+            self.table.setItem(row, 4, visible_item)
 
-    def on_cell_double_clicked(self, row, column):
-        """Обработка двойного клика по ячейке"""
-        self.select_trace_for_digitization()
-
-    def update_buttons_state(self):
-        """Обновляет состояние кнопок"""
-        selected_items = self.table.selectedItems()
-        has_selection = len(selected_items) > 0
-
-        self.select_btn.setEnabled(has_selection)
-        self.delete_btn.setEnabled(has_selection)
+            # Сохраняем ссылку на трассу
+            self.table.item(row, 0).setData(Qt.UserRole, trace.id)
 
     def get_selected_trace(self):
-        """Возвращает выбранную трассу"""
-        selected_rows = self.table.selectionModel().selectedRows()
-        if selected_rows:
-            row = selected_rows[0].row()
-            item = self.table.item(row, 0)
-            if item:
-                return item.data(Qt.UserRole)
+        """Получить выбранную трассу"""
+        current_row = self.table.currentRow()
+        if current_row >= 0:
+            trace_id = self.table.item(current_row, 0).data(Qt.UserRole)
+            return self.project.get_trace(trace_id)
         return None
 
-    def create_trace_dialog(self):
-        """Создает новую трассу"""
-        if not self.project.raster:
-            QMessageBox.warning(self, "Ошибка",
-                                "Сначала загрузите сейсмограмму")
-            return
+    def add_trace(self):
+        """Добавить новую трассу"""
+        from PyQt5.QtWidgets import QInputDialog
+        from models.trace import Trace
 
-        # Простой диалог ввода названия
-        name, ok = QInputDialog.getText(
-            self, "Создание трассы",
-            "Введите название трассы:",
-            QLineEdit.Normal,
-            f"Трасса {len(self.project.traces) + 1}"
-        )
+        name, ok = QInputDialog.getText(self, "Новая трасса", "Введите название трассы:")
+        if ok and name:
+            trace_id = str(uuid.uuid4())
+            trace = Trace(
+                id=trace_id,
+                name=name,
+                raster_coords=((0, 0), (0, 0)),
+                is_visible=True,
+                is_editing=False
+            )
+            self.project.add_trace(trace)
+            self.load_traces()
+            self.trace_visibility_changed.emit()
+            QMessageBox.information(self, "Успех", f"Трасса '{name}' добавлена")
 
-        if ok and name.strip():
-            # Создаем трассу
-            new_trace = Trace(name=name.strip())
-            new_trace.is_editing = True
-
-            # Добавляем в проект
-            if hasattr(self.project, 'add_trace'):
-                self.project.add_trace(new_trace)
-            else:
-                if not hasattr(self.project, 'traces'):
-                    self.project.traces = []
-                self.project.traces.append(new_trace)
-
-            # Обновляем таблицу
-            self.update_table()
-
-            # Сигнализируем о начале выделения
-            self.start_trace_selection.emit(new_trace)
-
-            # Закрываем диалог
-            self.accept()
-
-    def select_trace_for_digitization(self):
-        """Выбирает трассу для выделения на изображении"""
-        trace = self.get_selected_trace()
-        if trace:
-            trace.is_editing = True
-            self.start_trace_selection.emit(trace)
-            self.accept()
-
-    def delete_selected_trace(self):
-        """Удаляет выбранную трассу"""
+    def edit_trace(self):
+        """Редактировать название трассы"""
         trace = self.get_selected_trace()
         if not trace:
+            QMessageBox.warning(self, "Ошибка", "Выберите трассу для редактирования")
             return
 
+        from PyQt5.QtWidgets import QInputDialog
+        name, ok = QInputDialog.getText(self, "Редактирование",
+                                        "Введите новое название:",
+                                        text=trace.name)
+        if ok and name:
+            trace.name = name
+            self.load_traces()
+            QMessageBox.information(self, "Успех", f"Трасса переименована в '{name}'")
+
+    def delete_trace(self):
+        """Удалить выбранную трассу"""
+        trace = self.get_selected_trace()
+        if not trace:
+            QMessageBox.warning(self, "Ошибка", "Выберите трассу для удаления")
+            return
+
+        total_points = sum(len(interval.points) for interval in trace.intervals)
+
         reply = QMessageBox.question(
-            self, "Подтверждение",
-            f"Удалить трассу '{trace.name}'?",
+            self,
+            "Подтверждение удаления",
+            f"Вы уверены, что хотите удалить трассу '{trace.name}'?\n"
+            f"(Содержит {len(trace.intervals)} интервалов и {total_points} точек)",
             QMessageBox.Yes | QMessageBox.No
         )
 
         if reply == QMessageBox.Yes:
-            if hasattr(self.project, 'remove_trace'):
-                self.project.remove_trace(trace)
-            else:
-                if trace in self.project.traces:
-                    self.project.traces.remove(trace)
+            # Сохраняем ID перед удалением
+            trace_id = trace.id
 
-            self.update_table()
+            # Очищаем данные трассы
+            for interval in trace.intervals:
+                interval.points.clear()
+            trace.intervals.clear()
 
-    def show_context_menu(self, position):
-        """Показывает контекстное меню"""
+            # Удаляем из проекта
+            self.project.remove_trace(trace_id)
+
+            # Проверяем родительский canvas
+            parent = self.parent()
+            if parent and hasattr(parent, 'canvas'):
+                canvas = parent.canvas
+                if canvas.current_trace and canvas.current_trace.id == trace_id:
+                    canvas.current_trace = None
+                    canvas.current_interval = None
+                    canvas.update_display()
+
+                # Обновляем селектор в controls_panel
+                if hasattr(parent, 'update_trace_selector'):
+                    parent.update_trace_selector()
+
+            self.load_traces()
+            self.trace_visibility_changed.emit()
+
+            # Принудительная сборка мусора
+            import gc
+            gc.collect()
+
+            QMessageBox.information(self, "Успех", f"Трасса '{trace.name}' удалена")
+
+    def hide_selected_trace(self):
+        """Скрыть выбранную трассу"""
         trace = self.get_selected_trace()
         if not trace:
+            QMessageBox.warning(self, "Ошибка", "Выберите трассу для скрытия")
             return
 
-        menu = QMenu()
+        trace.is_visible = False
+        self.load_traces()
+        self.trace_visibility_changed.emit()
 
-        # Переименовать
-        rename_action = menu.addAction("Переименовать")
-        rename_action.triggered.connect(lambda: self.rename_trace(trace))
+        # Обновляем отображение
+        parent = self.parent()
+        if parent and hasattr(parent, 'canvas'):
+            parent.canvas.update_display()
+            if hasattr(parent, 'update_trace_selector'):
+                parent.update_trace_selector()
 
-        # Выделить
-        select_action = menu.addAction("Выделить на изображении")
-        select_action.triggered.connect(lambda: self.select_trace_for_digitization())
+    def show_selected_trace(self):
+        """Показать выбранную трассу"""
+        trace = self.get_selected_trace()
+        if not trace:
+            QMessageBox.warning(self, "Ошибка", "Выберите трассу для показа")
+            return
 
-        # Удалить
-        delete_action = menu.addAction("Удалить")
-        delete_action.triggered.connect(lambda: self.delete_selected_trace())
+        trace.is_visible = True
+        self.load_traces()
+        self.trace_visibility_changed.emit()
 
-        menu.exec_(self.table.viewport().mapToGlobal(position))
+        # Обновляем отображение
+        parent = self.parent()
+        if parent and hasattr(parent, 'canvas'):
+            parent.canvas.update_display()
+            if hasattr(parent, 'update_trace_selector'):
+                parent.update_trace_selector()
 
-    def rename_trace(self, trace):
-        """Переименовывает трассу"""
-        new_name, ok = QInputDialog.getText(
-            self, "Переименование",
-            "Новое название:",
-            QLineEdit.Normal,
-            trace.name
-        )
+    def hide_all_traces(self):
+        """Скрыть все трассы"""
+        for trace in self.project.traces:
+            trace.is_visible = False
+        self.load_traces()
+        self.trace_visibility_changed.emit()
 
-        if ok and new_name.strip():
-            trace.name = new_name.strip()
-            self.update_table()
+        # Обновляем отображение
+        parent = self.parent()
+        if parent and hasattr(parent, 'canvas'):
+            parent.canvas.update_display()
+            if hasattr(parent, 'update_trace_selector'):
+                parent.update_trace_selector()
+
+    def show_all_traces(self):
+        """Показать все трассы"""
+        for trace in self.project.traces:
+            trace.is_visible = True
+        self.load_traces()
+        self.trace_visibility_changed.emit()
+
+        # Обновляем отображение
+        parent = self.parent()
+        if parent and hasattr(parent, 'canvas'):
+            parent.canvas.update_display()
+            if hasattr(parent, 'update_trace_selector'):
+                parent.update_trace_selector()
+
+    def start_editing(self):
+        """Начать редактирование выбранной трассы"""
+        trace = self.get_selected_trace()
+        if not trace:
+            QMessageBox.warning(self, "Ошибка", "Выберите трассу для оцифровки")
+            return
+
+        if not self.project.raster_data:
+            QMessageBox.warning(self, "Ошибка", "Сначала загрузите растер")
+            return
+
+        self.start_trace_selection.emit(trace)
+        self.accept()
+
+    def refresh(self):
+        """Обновить таблицу"""
+        self.load_traces()

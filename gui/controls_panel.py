@@ -1,138 +1,207 @@
-# Панель управления
-
-from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QGroupBox, QLabel,
-                             QComboBox, QPushButton, QColorDialog, QSpinBox,
-                             QHBoxLayout, QCheckBox)
+# gui/controls_panel.py
+from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QPushButton,
+                             QComboBox, QLabel, QGroupBox, QSpinBox,
+                             QFrame)
 from PyQt5.QtCore import pyqtSignal
-from PyQt5.QtGui import QColor
+
 
 class ControlsPanel(QWidget):
-    """Панель управления параметрами оцифровки."""
+    mode_changed = pyqtSignal(str)
+    undo_requested = pyqtSignal()
+    redo_requested = pyqtSignal()
+    interpolate_requested = pyqtSignal()
+    remove_trend_requested = pyqtSignal()
+    finish_interval_requested = pyqtSignal()
+    manage_traces_requested = pyqtSignal()
+    finish_trace_requested = pyqtSignal()
+    trace_selected = pyqtSignal(object)  # Сигнал выбора трассы (None - все трассы)
 
-    # Сигналы
-    interval_type_changed = pyqtSignal(str)
-    color_changed = pyqtSignal(str)
-    polynomial_order_changed = pyqtSignal(int)
+    def __init__(self):
+        super().__init__()
+        self.setup_ui()
 
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.main_window = parent
-        self.current_color = "#FF0000"
-        self.init_ui()
+    def setup_ui(self):
+        layout = QVBoxLayout()
 
-    def init_ui(self):
-        layout = QVBoxLayout(self)
+        # ===== РЕЖИМ "ПАНОРАМИРОВАНИЕ" =====
+        pan_group = QGroupBox("Навигация")
+        pan_layout = QVBoxLayout()
 
-        # Группа "Тип интервала"
-        type_group = QGroupBox("Тип интервала")
-        type_layout = QVBoxLayout()
+        self.pan_mode_btn = QPushButton("🔍 Режим панорамирования")
+        self.pan_mode_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                font-weight: bold;
+                padding: 8px;
+                border-radius: 5px;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
+        """)
+        self.pan_mode_btn.clicked.connect(lambda: self.mode_changed.emit('pan'))
+        pan_layout.addWidget(self.pan_mode_btn)
 
-        self.type_combo = QComboBox()
-        self.type_combo.addItems(["Метка времени", "Волновая форма", "Помеха"])
-        self.type_combo.currentIndexChanged.connect(self.on_type_changed)
-        type_layout.addWidget(QLabel("Тип:"))
-        type_layout.addWidget(self.type_combo)
+        pan_group.setLayout(pan_layout)
+        layout.addWidget(pan_group)
 
-        type_group.setLayout(type_layout)
-        layout.addWidget(type_group)
+        # Разделитель
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setFrameShadow(QFrame.Sunken)
+        layout.addWidget(line)
 
-        # Группа "Настройки отображения"
-        display_group = QGroupBox("Настройки отображения")
-        display_layout = QVBoxLayout()
+        # ===== РЕЖИМ "ОЦИФРОВКА" =====
+        digitize_group = QGroupBox("Оцифровка")
+        digitize_layout = QVBoxLayout()
 
-        # Цвет
-        color_layout = QHBoxLayout()
-        color_layout.addWidget(QLabel("Цвет:"))
-        self.color_btn = QPushButton()
-        self.color_btn.setFixedSize(30, 30)
-        self.color_btn.setStyleSheet(f"background-color: {self.current_color};")
-        self.color_btn.clicked.connect(self.choose_color)
-        color_layout.addWidget(self.color_btn)
-        color_layout.addStretch()
-        display_layout.addLayout(color_layout)
+        self.digitize_mode_btn = QPushButton("✏️ Режим оцифровки")
+        self.digitize_mode_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2196F3;
+                color: white;
+                font-weight: bold;
+                padding: 8px;
+                border-radius: 5px;
+            }
+            QPushButton:hover {
+                background-color: #0b7dda;
+            }
+        """)
+        self.digitize_mode_btn.clicked.connect(lambda: self.mode_changed.emit('digitize'))
+        digitize_layout.addWidget(self.digitize_mode_btn)
 
-        display_group.setLayout(display_layout)
-        layout.addWidget(display_group)
+        digitize_layout.addWidget(QLabel("Инструменты оцифровки"))
 
-        # Группа "Интерполяция"
-        interp_group = QGroupBox("Интерполяция")
+        self.add_point_btn = QPushButton("➕ Добавить точку")
+        self.add_point_btn.clicked.connect(lambda: self.mode_changed.emit('add_point'))
+        digitize_layout.addWidget(self.add_point_btn)
+
+        self.delete_point_btn = QPushButton("❌ Удалить точку")
+        self.delete_point_btn.clicked.connect(lambda: self.mode_changed.emit('delete_point'))
+        digitize_layout.addWidget(self.delete_point_btn)
+
+        self.move_point_btn = QPushButton("✏️ Переместить точку")
+        self.move_point_btn.clicked.connect(lambda: self.mode_changed.emit('move_point'))
+        digitize_layout.addWidget(self.move_point_btn)
+
+        self.finish_interval_btn = QPushButton("✅ Завершить текущую линию")
+        self.finish_interval_btn.clicked.connect(self.finish_interval_requested.emit)
+        digitize_layout.addWidget(self.finish_interval_btn)
+
+        digitize_group.setLayout(digitize_layout)
+        layout.addWidget(digitize_group)
+
+        # ===== Группа управления =====
+        control_group = QGroupBox("Управление")
+        control_layout = QVBoxLayout()
+
+        self.undo_btn = QPushButton("↩️ Отменить (Ctrl+Z)")
+        self.undo_btn.clicked.connect(self.undo_requested.emit)
+        control_layout.addWidget(self.undo_btn)
+
+        self.redo_btn = QPushButton("↪️ Вернуть (Ctrl+Y)")
+        self.redo_btn.clicked.connect(self.redo_requested.emit)
+        control_layout.addWidget(self.redo_btn)
+
+        control_group.setLayout(control_layout)
+        layout.addWidget(control_group)
+
+        # ===== Группа обработки =====
+        process_group = QGroupBox("Обработка")
+        process_layout = QVBoxLayout()
+
+        self.interpolate_btn = QPushButton("📈 Интерполяция")
+        self.interpolate_btn.clicked.connect(self.interpolate_requested.emit)
+        process_layout.addWidget(self.interpolate_btn)
+
+        self.trend_btn = QPushButton("📉 Удалить тренд")
+        self.trend_btn.clicked.connect(self.remove_trend_requested.emit)
+        process_layout.addWidget(self.trend_btn)
+
+        process_group.setLayout(process_layout)
+        layout.addWidget(process_group)
+
+        # ===== Группа трасс =====
+        traces_group = QGroupBox("Трассы")
+        traces_layout = QVBoxLayout()
+
+        traces_layout.addWidget(QLabel("Отображение:"))
+        self.trace_selector = QComboBox()
+        self.trace_selector.addItem("📊 Все трассы", None)  # Добавляем пункт "Все трассы"
+        self.trace_selector.currentIndexChanged.connect(self.on_trace_selected)
+        traces_layout.addWidget(self.trace_selector)
+
+        self.manage_traces_btn = QPushButton("📋 Управление трассами")
+        self.manage_traces_btn.clicked.connect(self.manage_traces_requested)
+        traces_layout.addWidget(self.manage_traces_btn)
+
+        self.finish_trace_btn = QPushButton("🏁 Завершить текущую трассу")
+        self.finish_trace_btn.clicked.connect(self.finish_trace_requested)
+        traces_layout.addWidget(self.finish_trace_btn)
+
+        traces_group.setLayout(traces_layout)
+        layout.addWidget(traces_group)
+
+        # ===== Группа настроек интерполяции =====
+        interp_group = QGroupBox("Параметры интерполяции")
         interp_layout = QVBoxLayout()
 
-        interp_layout.addWidget(QLabel("Порядок полинома:"))
-        self.poly_spin = QSpinBox()
-        self.poly_spin.setRange(1, 10)
-        self.poly_spin.setValue(3)
-        self.poly_spin.valueChanged.connect(self.on_poly_order_changed)
-        interp_layout.addWidget(self.poly_spin)
+        interp_layout.addWidget(QLabel("Тип полинома:"))
+        self.interp_type = QComboBox()
+        self.interp_type.addItems(["Линейный", "Квадратичный", "Кубический"])
+        interp_layout.addWidget(self.interp_type)
+
+        interp_layout.addWidget(QLabel("Количество точек:"))
+        self.num_points = QSpinBox()
+        self.num_points.setRange(10, 10000)
+        self.num_points.setValue(500)
+        interp_layout.addWidget(self.num_points)
 
         interp_group.setLayout(interp_layout)
         layout.addWidget(interp_group)
 
-        # Группа "Действия"
-        action_group = QGroupBox("Действия")
-        action_layout = QVBoxLayout()
-
-        self.finish_btn = QPushButton("Завершить интервал (ПКМ)")
-        self.finish_btn.clicked.connect(self.finish_interval)
-        action_layout.addWidget(self.finish_btn)
-
-        self.clear_btn = QPushButton("Очистить интервал (Del)")
-        self.clear_btn.clicked.connect(self.clear_interval)
-        action_layout.addWidget(self.clear_btn)
-
-        self.interpolate_btn = QPushButton("Интерполировать")
-        self.interpolate_btn.clicked.connect(self.interpolate_current)
-        action_layout.addWidget(self.interpolate_btn)
-
-        action_group.setLayout(action_layout)
-        layout.addWidget(action_group)
-
-        # Группа "Коррекции"
-        correction_group = QGroupBox("Коррекции")
-        correction_layout = QVBoxLayout()
-
-        self.correct_trend_cb = QCheckBox("Автокоррекция тренда")
-        correction_layout.addWidget(self.correct_trend_cb)
-
-        correction_group.setLayout(correction_layout)
-        layout.addWidget(correction_group)
-
         layout.addStretch()
+        self.setLayout(layout)
 
-    def on_type_changed(self, index):
-        """Обработка изменения типа интервала."""
-        type_map = {
-            0: "time_marker",
-            1: "waveform",
-            2: "noise"
-        }
-        type_str = type_map.get(index, "waveform")
-        self.main_window.current_interval_type = type_str
-        self.interval_type_changed.emit(type_str)
+    def set_digitize_tools_enabled(self, enabled: bool):
+        """Включить/выключить инструменты оцифровки"""
+        self.add_point_btn.setEnabled(enabled)
+        self.delete_point_btn.setEnabled(enabled)
+        self.move_point_btn.setEnabled(enabled)
+        self.finish_interval_btn.setEnabled(enabled)
 
-    def choose_color(self):
-        """Выбор цвета для интервала."""
-        color = QColorDialog.getColor(QColor(self.current_color), self, "Выберите цвет")
-        if color.isValid():
-            self.current_color = color.name()
-            self.color_btn.setStyleSheet(f"background-color: {self.current_color};")
-            self.color_changed.emit(self.current_color)
+    def update_trace_selector(self, traces, current_trace_id=None):
+        """Обновить выпадающий список трасс"""
+        self.trace_selector.blockSignals(True)
 
-    def on_poly_order_changed(self, value):
-        """Обработка изменения порядка полинома."""
-        self.polynomial_order_changed.emit(value)
+        self.trace_selector.clear()
+        self.trace_selector.addItem("📊 Все трассы", None)
 
-    def finish_interval(self):
-        """Завершает текущий интервал."""
-        if self.main_window.raster_canvas:
-            self.main_window.raster_canvas.finish_current_interval()
+        for trace in traces:
+            icon = "👁️" if trace.is_visible else "🚫"
+            self.trace_selector.addItem(f"{icon} {trace.name}", trace.id)
 
-    def clear_interval(self):
-        """Очищает текущий интервал."""
-        if self.main_window.raster_canvas:
-            self.main_window.raster_canvas.clear_current_interval()
+        # Восстанавливаем выбор
+        if current_trace_id:
+            index = self.trace_selector.findData(current_trace_id)
+            if index >= 0:
+                self.trace_selector.setCurrentIndex(index)
+        else:
+            self.trace_selector.setCurrentIndex(0)  # "Все трассы" по умолчанию
 
-    def interpolate_current(self):
-        """Интерполирует текущий интервал."""
-        # TODO: Реализовать интерполяцию
-        print("Интерполяция будет реализована позже")
+        self.trace_selector.blockSignals(False)
+
+    def on_trace_selected(self, index):
+        """Обработка выбора трассы"""
+        if index < 0:
+            return
+
+        trace_id = self.trace_selector.itemData(index)
+        self.trace_selected.emit(trace_id)
+
+    def get_selected_trace_id(self):
+        """Получить ID выбранной трассы"""
+        current_data = self.trace_selector.currentData()
+        return current_data

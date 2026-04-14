@@ -1,819 +1,434 @@
-from PIL.Image import Image
-from PyQt5.QtGui import QPen, QColor
-from PyQt5.QtWidgets import *
-from PyQt5.QtCore import Qt, QRectF
-from PyQt5.QtOpenGL import QGLWidget, QGLFormat
-from OpenGL.GL import *
+from PyQt5.QtWidgets import QGraphicsView, QGraphicsScene, QGraphicsPixmapItem
+from PyQt5.QtCore import Qt, QPointF, QRectF, pyqtSignal
+from PyQt5.QtGui import QPixmap, QPainter, QPen, QColor, QWheelEvent, QMouseEvent
+import numpy as np
 
-class OpenGLRasterWidget(QGLWidget):
-    def __init__(self, parent=None):
-        format = QGLFormat()
-        format.setSampleBuffers(True)
-        format.setSamples(4)
-        format.setDepth(True)
-        format.setRgba(True)
-        format.setDoubleBuffer(True)
 
-        super().__init__(format, parent)
-
-        self.raster = None
-        self.textures = {}
-        self.tile_size = (512, 512)  # Уменьшаем для надежности
-
-        # Трансформации
-        self.scale = 1.0
-        self.translate_x = 0.0
-        self.translate_y = 0.0
-
-        # Размеры изображения
-        self.image_width = 0
-        self.image_height = 0
-
-        # Флаги
-        self.needs_center_view = True  # Флаг для центрирования при первой загрузке
-
-        self.setMouseTracking(True)
-
-    def set_raster(self, raster):
-        """Устанавливает растр и центрирует вид."""
-        if raster is None:
-            return False
-
-        self.raster = raster
-        info = raster.get_image_info()
-        if info:
-            self.image_width = info['size'][0]
-            self.image_height = info['size'][1]
-
-            print(f"Изображение: {self.image_width}x{self.image_height}")
-            print(f"Тайл: {self.tile_size[0]}x{self.tile_size[1]}")
-
-            # Сбрасываем трансформации
-            self.scale = 1.0
-            self.translate_x = 0.0
-            self.translate_y = 0.0
-
-            # Устанавливаем флаг центрирования
-            self.needs_center_view = True
-
-            # Загружаем начальные тайлы
-            self.load_visible_tiles()
-
-            # Принудительно обновляем
-            self.update()
-
-            return True
-        return False
-
-    def initializeGL(self):
-        """Инициализация OpenGL."""
-        try:
-            glClearColor(0.0, 0.0, 0.0, 1.0)  # Черный фон
-            glEnable(GL_TEXTURE_2D)
-            glEnable(GL_BLEND)
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-
-            # Включаем сглаживание линий
-            glEnable(GL_LINE_SMOOTH)
-            glHint(GL_LINE_SMOOTH_HINT, GL_NICEST)
-
-            print("OpenGL инициализирован")
-
-        except Exception as e:
-            print(f"Ошибка инициализации OpenGL: {e}")
-
-    def resizeGL(self, width, height):
-        """Обработка изменения размера окна."""
-        glViewport(0, 0, width, height)
-
-        # Если изображение загружено, центрируем вид
-        if self.image_width > 0 and self.image_height > 0:
-            self.center_view()
-
-        self.load_visible_tiles()
-
-    def paintGL(self):
-        """Отрисовка сцены."""
-        try:
-            # Очищаем буфер
-            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-
-            # Устанавливаем проекцию
-            glMatrixMode(GL_PROJECTION)
-            glLoadIdentity()
-
-            # Ортографическая проекция - ВАЖНО!
-            # Координаты: (0,0) в левом верхнем углу
-            glOrtho(0, self.width(), self.height(), 0, -1, 1)
-
-            glMatrixMode(GL_MODELVIEW)
-            glLoadIdentity()
-
-            # Если нет изображения, рисуем только фон
-            if self.image_width == 0 or self.image_height == 0:
-                return
-
-            # Автоматически центрируем при первой отрисовке
-            if self.needs_center_view:
-                self.center_view()
-                self.needs_center_view = False
-
-            # Применяем трансформации
-            glTranslatef(self.translate_x, self.translate_y, 0)
-            glScalef(self.scale, self.scale, 1.0)
-
-            # Рисуем рамку для изображения (для отладки)
-            glColor3f(0.5, 0.5, 0.5)  # Серый
-            glLineWidth(1.0)
-            glBegin(GL_LINE_LOOP)
-            glVertex2f(0, 0)
-            glVertex2f(self.image_width, 0)
-            glVertex2f(self.image_width, self.image_height)
-            glVertex2f(0, self.image_height)
-            glEnd()
-
-            # Включаем текстуры
-            glEnable(GL_TEXTURE_2D)
-
-            # Рисуем тайлы
-            tile_w, tile_h = self.tile_size
-
-            for (tx, ty), texture_id in self.textures.items():
-                x = tx * tile_w
-                y = ty * tile_h
-
-                # Получаем реальный размер тайла
-                actual_w = min(tile_w, self.image_width - x)
-                actual_h = min(tile_h, self.image_height - y)
-
-                if actual_w <= 0 or actual_h <= 0:
-                    continue
-
-                try:
-                    glBindTexture(GL_TEXTURE_2D, texture_id)
-                    glColor3f(1.0, 1.0, 1.0)  # Белый цвет
-
-                    glBegin(GL_QUADS)
-                    # Важно: координаты текстуры от 0 до 1
-                    # Важно: вершины по часовой стрелке
-                    glTexCoord2f(0.0, 0.0)
-                    glVertex2f(x, y)
-
-                    glTexCoord2f(1.0, 0.0)
-                    glVertex2f(x + actual_w, y)
-
-                    glTexCoord2f(1.0, 1.0)
-                    glVertex2f(x + actual_w, y + actual_h)
-
-                    glTexCoord2f(0.0, 1.0)
-                    glVertex2f(x, y + actual_h)
-                    glEnd()
-
-                except Exception as e:
-                    print(f"Ошибка отрисовки тайла {tx},{ty}: {e}")
-
-            glBindTexture(GL_TEXTURE_2D, 0)
-            glDisable(GL_TEXTURE_2D)
-
-            parent = self.parent()
-            if (parent and hasattr(parent, 'selection_mode') and
-                    parent.selection_mode == "trace" and
-                    hasattr(parent, 'drag_start_pos') and
-                    parent.drag_start_pos):
-                # Рисуем прямоугольник выделения поверх всего
-                glMatrixMode(GL_MODELVIEW)
-                glPushMatrix()
-                glLoadIdentity()
-
-                # Отключаем текстуры
-                glDisable(GL_TEXTURE_2D)
-
-                # Полупрозрачный красный цвет
-                glColor4f(1.0, 0.0, 0.0, 0.3)  # RGBA: красный, 30% прозрачность
-
-                # Получаем текущую позицию мыши
-                current_pos = self.mapFromGlobal(QCursor.pos())
-
-                # Вычисляем прямоугольник
-                x1 = min(parent.drag_start_pos.x(), current_pos.x())
-                y1 = min(parent.drag_start_pos.y(), current_pos.y())
-                x2 = max(parent.drag_start_pos.x(), current_pos.x())
-                y2 = max(parent.drag_start_pos.y(), current_pos.y())
-
-                # Рисуем залитый прямоугольник
-                glBegin(GL_QUADS)
-                glVertex2f(x1, y1)
-                glVertex2f(x2, y1)
-                glVertex2f(x2, y2)
-                glVertex2f(x1, y2)
-                glEnd()
-
-                # Контур прямоугольника
-                glColor4f(1.0, 0.0, 0.0, 1.0)  # Непрозрачный красный
-                glLineWidth(2.0)
-                glBegin(GL_LINE_LOOP)
-                glVertex2f(x1, y1)
-                glVertex2f(x2, y1)
-                glVertex2f(x2, y2)
-                glVertex2f(x1, y2)
-                glEnd()
-
-                glEnable(GL_TEXTURE_2D)
-                glPopMatrix()
-
-        except Exception as e:
-            print(f"Ошибка в paintGL: {e}")
-
-    def center_view(self):
-        """Центрирует изображение в виджете."""
-        if self.image_width == 0 or self.image_height == 0:
-            return
-
-        widget_width = self.width()
-        widget_height = self.height()
-
-        if widget_width == 0 or widget_height == 0:
-            return
-
-        # Вычисляем масштаб, чтобы изображение поместилось
-        scale_x = widget_width / self.image_width
-        scale_y = widget_height / self.image_height
-        self.scale = min(scale_x, scale_y) * 0.9  # 90% от полного размера
-
-        # Центрируем
-        scaled_width = self.image_width * self.scale
-        scaled_height = self.image_height * self.scale
-
-        self.translate_x = (widget_width - scaled_width) / 2
-        self.translate_y = (widget_height - scaled_height) / 2
-
-        # Обновляем тайлы
-        self.load_visible_tiles()
-
-    def fit_to_view(self):
-        """Подгоняет изображение под размер окна."""
-        self.center_view()
-        self.update()
-
-    def load_visible_tiles(self):
-        """Загружает только видимые тайлы."""
-        if not self.raster or self.image_width == 0 or self.image_height == 0:
-            return
-
-        # Вычисляем видимую область в координатах изображения
-        viewport = self.get_visible_viewport()
-
-        if viewport[2] <= viewport[0] or viewport[3] <= viewport[1]:
-            return
-
-        # Определяем, какие тайлы нужны
-        needed_tiles = self.calculate_needed_tiles(viewport)
-
-        # Загружаем новые тайлы
-        for tile_pos in needed_tiles:
-            if tile_pos not in self.textures:
-                self.load_tile(tile_pos)
-
-        # Удаляем невидимые тайлы
-        tiles_to_remove = []
-        for tile_pos in self.textures:
-            if tile_pos not in needed_tiles:
-                tiles_to_remove.append(tile_pos)
-
-        for tile_pos in tiles_to_remove:
-            self.unload_tile(tile_pos)
-
-        self.update()
-
-    def get_visible_viewport(self):
-        """Возвращает видимую область в координатах изображения."""
-        if self.width() == 0 or self.height() == 0:
-            return (0, 0, 0, 0)
-
-        # Преобразуем координаты виджета в координаты изображения
-
-        # 1. Координаты углов виджета
-        widget_left = 0
-        widget_top = 0
-        widget_right = self.width()
-        widget_bottom = self.height()
-
-        # 2. Применяем обратные трансформации
-        #    Сначала перемещение, потом масштаб
-        scale = self.scale if self.scale != 0 else 1.0
-
-        # Координаты в системе изображения
-        img_left = (widget_left - self.translate_x) / scale
-        img_top = (widget_top - self.translate_y) / scale
-        img_right = (widget_right - self.translate_x) / scale
-        img_bottom = (widget_bottom - self.translate_y) / scale
-
-        # Обрезаем по границам изображения
-        img_left = max(0, min(img_left, self.image_width))
-        img_top = max(0, min(img_top, self.image_height))
-        img_right = max(0, min(img_right, self.image_width))
-        img_bottom = max(0, min(img_bottom, self.image_height))
-
-        return (img_left, img_top, img_right, img_bottom)
-
-    def calculate_needed_tiles(self, viewport):
-        """Вычисляет, какие тайлы нужны для отображения области."""
-        tiles = set()
-        x1, y1, x2, y2 = viewport
-
-        if x2 <= x1 or y2 <= y1:
-            return tiles
-
-        # Добавляем margin для плавной прокрутки
-        margin = self.tile_size[0] // 4  # 25% от размера тайла
-        x1 = max(0, x1 - margin)
-        y1 = max(0, y1 - margin)
-        x2 = min(self.image_width, x2 + margin)
-        y2 = min(self.image_height, y2 + margin)
-
-        # Вычисляем индексы тайлов
-        tile_w, tile_h = self.tile_size
-        start_x = int(x1 // tile_w)
-        start_y = int(y1 // tile_h)
-        end_x = int(x2 // tile_w) + 1
-        end_y = int(y2 // tile_h) + 1
-
-        for tx in range(start_x, end_x):
-            for ty in range(start_y, end_y):
-                tiles.add((tx, ty))
-
-        return tiles
-
-    def load_tile(self, tile_pos):
-        """Загружает тайл в текстуру OpenGL с исправлением памяти."""
-        try:
-            tx, ty = tile_pos
-            tile_w, tile_h = self.tile_size
-
-            x = tx * tile_w
-            y = ty * tile_h
-
-            # Получаем тайл из растра
-            tile_image = self.raster.get_tile(x, y, tile_w, tile_h)
-            if tile_image is None:
-                return
-
-            # Проверяем и конвертируем формат
-            original_mode = tile_image.mode
-
-            # Конвертируем в поддерживаемый формат
-            if original_mode == '1':  # Бинарное
-                tile_image = tile_image.convert('L').convert('RGB')
-                data_format = GL_RGB
-                internal_format = GL_RGB
-                bytes_per_pixel = 3
-            elif original_mode == 'L':  # Градации серого
-                tile_image = tile_image.convert('RGB')
-                data_format = GL_RGB
-                internal_format = GL_RGB
-                bytes_per_pixel = 3
-            elif original_mode == 'P':  # Палитровое
-                tile_image = tile_image.convert('RGB')
-                data_format = GL_RGB
-                internal_format = GL_RGB
-                bytes_per_pixel = 3
-            elif original_mode == 'RGB':
-                data_format = GL_RGB
-                internal_format = GL_RGB
-                bytes_per_pixel = 3
-            elif original_mode == 'RGBA':
-                data_format = GL_RGBA
-                internal_format = GL_RGBA
-                bytes_per_pixel = 4
-            else:
-                # Неизвестный формат - конвертируем в RGB
-                tile_image = tile_image.convert('RGB')
-                data_format = GL_RGB
-                internal_format = GL_RGB
-                bytes_per_pixel = 3
-
-            # Получаем данные изображения
-            try:
-                if data_format == GL_RGB:
-                    # Важно: используем правильный порядок байтов
-                    image_data = tile_image.tobytes("raw", "RGB")
-                else:  # RGBA
-                    image_data = tile_image.tobytes("raw", "RGBA")
-
-                expected_size = tile_image.width * tile_image.height * bytes_per_pixel
-                actual_size = len(image_data)
-
-                if actual_size != expected_size:
-                    print(f"Ошибка: размер данных {actual_size} != ожидаемый {expected_size}")
-                    return
-
-            except Exception as e:
-                print(f"Ошибка получения данных: {e}")
-                return
-
-            self.makeCurrent()
-
-            # Генерируем текстуру
-            texture_id = glGenTextures(1)
-            if texture_id <= 0:
-                print(f"Ошибка генерации текстуры")
-                return
-
-            glBindTexture(GL_TEXTURE_2D, texture_id)
-
-            # Настройки текстуры (важно для больших текстур)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
-
-            # Отключаем выравнивание (пакетное чтение может его включать)
-            glPixelStorei(GL_UNPACK_ALIGNMENT, 1)
-
-            # Загружаем текстуру
-            try:
-                glTexImage2D(GL_TEXTURE_2D, 0, internal_format,
-                             tile_image.width, tile_image.height, 0,
-                             data_format, GL_UNSIGNED_BYTE, image_data)
-
-                # Проверяем ошибки OpenGL
-                error = glGetError()
-                if error != GL_NO_ERROR:
-                    print(f"OpenGL ошибка: {error}")
-                    # Пробуем с меньшим размером
-                    if tile_image.width > 2048 or tile_image.height > 2048:
-                        # Уменьшаем размер в 2 раза
-                        small_image = tile_image.resize(
-                            (tile_image.width // 2, tile_image.height // 2),
-                            Image.Resampling.LANCZOS
-                        )
-                        if data_format == GL_RGB:
-                            small_data = small_image.tobytes("raw", "RGB")
-                        else:
-                            small_data = small_image.tobytes("raw", "RGBA")
-
-                        glTexImage2D(GL_TEXTURE_2D, 0, internal_format,
-                                     small_image.width, small_image.height, 0,
-                                     data_format, GL_UNSIGNED_BYTE, small_data)
-
-                        error = glGetError()
-                        if error != GL_NO_ERROR:
-                            print(f"OpenGL ошибка после уменьшения: {error}")
-                            glDeleteTextures([texture_id])
-                            return
-
-            except Exception as e:
-                print(f"Исключение при glTexImage2D: {e}")
-                glDeleteTextures([texture_id])
-                return
-
-            # Сохраняем текстуру
-            self.textures[tile_pos] = texture_id
-
-            tile_image = None
-
-        except Exception as e:
-            print(f"Ошибка загрузки тайла {tile_pos}: {e}")
-
-    def unload_tile(self, tile_pos):
-        """Выгружает тайл из памяти."""
-        if tile_pos in self.textures:
-            try:
-                self.makeCurrent()
-                glDeleteTextures([self.textures[tile_pos]])
-                del self.textures[tile_pos]
-            except Exception as e:
-                print(f"Ошибка выгрузки тайла {tile_pos}: {e}")
-
-    def wheelEvent(self, event):
-        """Масштабирование относительно позиции курсора мыши."""
-        if self.image_width == 0 or self.image_height == 0:
-            return
-
-        # Сохраняем старый масштаб
-        old_scale = self.scale
-
-        # Определяем коэффициент масштабирования
-        zoom_factor = 1.25 if event.angleDelta().y() > 0 else 0.8
-
-        # Получаем позицию курсора в координатах виджета
-        mouse_x = event.x()
-        mouse_y = event.y()
-
-        # Преобразуем координаты курсора в систему изображения ДО масштабирования
-        img_x_before = (mouse_x - self.translate_x) / old_scale
-        img_y_before = (mouse_y - self.translate_y) / old_scale
-
-        # Применяем новый масштаб
-        self.scale *= zoom_factor
-
-        # Ограничиваем масштаб
-        self.scale = max(0.01, min(100.0, self.scale))
-
-        # Вычисляем новые координаты курсора в системе изображения ПОСЛЕ масштабирования
-        img_x_after = (mouse_x - self.translate_x) / self.scale
-        img_y_after = (mouse_y - self.translate_y) / self.scale
-
-        # Корректируем смещение для сохранения позиции под курсором
-        dx = (img_x_after - img_x_before) * self.scale
-        dy = (img_y_after - img_y_before) * self.scale
-
-        self.translate_x += dx
-        self.translate_y += dy
-
-        # Обновляем тайлы и перерисовываем
-        self.load_visible_tiles()
-        self.update()
-
-        event.accept()
-
-    def mousePressEvent(self, event):
-        """Обработка нажатия мыши"""
-        parent = self.parent()
-
-        # Если в режиме выделения трассы - обрабатываем выделение
-        if parent and hasattr(parent, 'selection_mode') and parent.selection_mode == "trace":
-            if event.button() == Qt.LeftButton:
-                parent.drag_start_pos = event.pos()
-                print(f"Начало выделения: {parent.drag_start_pos.x()}, {parent.drag_start_pos.y()}")
-            return  # Блокируем панорамирование при выделении
-
-        # В обычном режиме - сохраняем для панорамирования
-        self.last_mouse_x = event.x()
-        self.last_mouse_y = event.y()
-
-    def mouseMoveEvent(self, event):
-        """Обработка движения мыши"""
-        parent = self.parent()
-
-        # Если в режиме выделения трассы - показываем прямоугольник
-        if parent and hasattr(parent, 'selection_mode') and parent.selection_mode == "trace":
-            if hasattr(parent, 'drag_start_pos') and parent.drag_start_pos and event.buttons() & Qt.LeftButton:
-                # Просто обновляем отрисовку для показа прямоугольника
-                self.update()
-            return  # Блокируем панорамирование при выделении
-
-        # В обычном режиме - панорамирование
-        if event.buttons() & Qt.LeftButton:
-            dx = event.x() - self.last_mouse_x
-            dy = event.y() - self.last_mouse_y
-
-            # Панорамирование
-            self.translate_x += dx
-            self.translate_y += dy
-
-            self.load_visible_tiles()
-            self.update()
-
-        self.last_mouse_x = event.x()
-        self.last_mouse_y = event.y()
-
-    def mouseReleaseEvent(self, event):
-        """Обработка отпускания мыши"""
-        parent = self.parent()
-
-        # Если в режиме выделения трассы - завершаем выделение
-        if parent and hasattr(parent, 'selection_mode') and parent.selection_mode == "trace":
-            if event.button() == Qt.LeftButton and hasattr(parent, 'drag_start_pos') and parent.drag_start_pos:
-                current_pos = event.pos()
-                dx = abs(current_pos.x() - parent.drag_start_pos.x())
-                dy = abs(current_pos.y() - parent.drag_start_pos.y())
-
-                if dx > 10 and dy > 10:
-                    x1 = min(parent.drag_start_pos.x(), current_pos.x())
-                    y1 = min(parent.drag_start_pos.y(), current_pos.y())
-                    x2 = max(parent.drag_start_pos.x(), current_pos.x())
-                    y2 = max(parent.drag_start_pos.y(), current_pos.y())
-
-                    bounds = (x1, y1, x2, y2)
-                    parent.finish_trace_selection(bounds)
-                else:
-                    print("Недостаточное перемещение для выделения")
-
-                parent.drag_start_pos = None
-                self.update()  # Обновляем, чтобы убрать прямоугольник выделения
-            return  # Блокируем панорамирование
-
-    def zoom_in(self):
-        """Увеличивает масштаб."""
-        self.scale *= 1.25
-        self.scale = min(100.0, self.scale)
-        self.load_visible_tiles()
-        self.update()
-
-    def zoom_out(self):
-        """Уменьшает масштаб."""
-        self.scale *= 0.8
-        self.scale = max(0.01, self.scale)
-        self.load_visible_tiles()
-        self.update()
-
-    def zoom_original(self):
-        """Возвращает исходный масштаб."""
-        self.scale = 1.0
-        self.translate_x = 0
-        self.translate_y = 0
-        self.load_visible_tiles()
-        self.update()
-
-
-class RasterCanvas(QWidget):
-    """Холст для отображения и оцифровки растрового изображения."""
+class RasterCanvas(QGraphicsView):
+    mouse_moved = pyqtSignal(float, float)
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.main_window = parent
 
-        # Основной layout
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        self.scene = QGraphicsScene(self)
+        self.setScene(self.scene)
 
-        # OpenGL виджет
-        self.gl_widget = OpenGLRasterWidget(self)
-        layout.addWidget(self.gl_widget)
+        self.pixmap_item = None
+        self.current_image = None
 
-        self.selection_mode = None  # Режим выделения (None, "trace", "interval", etc.)
-        self.current_trace = None  # Текущая редактируемая трасса
-        self.drag_start_pos = None  # Начальная позиция для выделения
-        self.current_trace_points = []  # Точки текущей трассы
+        # Режимы взаимодействия
+        self.mode = 'pan'  # pan, add_point, delete_point, move_point, digitize
 
-        print("RasterCanvas инициализирован")
+        # Данные оцифровки
+        self.current_trace = None
+        self.current_interval = None
 
-    def set_raster(self, raster):
-        """Устанавливает растровое изображение."""
+        # Масштабирование и панорамирование
+        self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
+        self.setResizeAnchor(QGraphicsView.AnchorUnderMouse)
+        self.setRenderHint(QPainter.Antialiasing)
 
-        if raster is None:
-            return False
+        # История действий
+        self.history = []
+        self.history_index = -1
 
-        try:
-            success = self.gl_widget.set_raster(raster)
+        # Настройки отображения
+        self.show_points = True
+        self.show_lines = True
+        self.point_size = 8
+        self.line_color = QColor(255, 50, 50)
+        self.line_width = 2
+        self.point_color = QColor(255, 50, 50)
 
-            if success:
-                # Принудительно обновляем
-                self.gl_widget.update()
-                QApplication.processEvents()
+        # Zoom limits
+        self.min_zoom = 0.1
+        self.max_zoom = 50.0
+        self.current_zoom = 1.0
 
-                # Ждем немного и снова обновляем
-                from PyQt5.QtCore import QTimer
-                QTimer.singleShot(100, self.gl_widget.update)
+        # Для перемещения точек
+        self.dragging_point = False
+        self.dragging_point_idx = -1
 
-            return success
+        # Настройка Drag Mode для панорамирования
+        self.setDragMode(QGraphicsView.ScrollHandDrag)
 
-        except Exception as e:
-            print(f"Ошибка при установке растра: {e}")
-            import traceback
-            traceback.print_exc()
-            return False
-
-    def clear_scene(self):
-        """Очищает сцену."""
-        self.gl_widget.raster = None
-        self.gl_widget.image_width = 0
-        self.gl_widget.image_height = 0
-        self.gl_widget.textures.clear()
-        self.gl_widget.update()
-
-    def fit_to_view(self):
-        """Подгоняет изображение под размер окна."""
-        self.gl_widget.fit_to_view()
-
-    def zoom_in(self):
-        """Увеличивает масштаб."""
-        self.gl_widget.zoom_in()
-
-    def zoom_out(self):
-        """Уменьшает масштаб."""
-        self.gl_widget.zoom_out()
-
-    def zoom_original(self):
-        """Возвращает исходный масштаб."""
-        self.gl_widget.zoom_original()
-
-    def start_trace_selection(self, trace):
-        """Включает режим выделения трассы"""
-        try:
-            if trace:
-                # Инициализируем атрибуты если нужно
-                if not hasattr(self, 'selection_mode'):
-                    self.selection_mode = None
-                if not hasattr(self, 'drag_start_pos'):
-                    self.drag_start_pos = None
-
-                self.selection_mode = "trace"
-                self.current_trace = trace
-                self.setCursor(Qt.CrossCursor)
-
-                print(f"Режим выделения для трассы: {trace.name}")
-                print("Зажмите ЛКМ и проведите для выделения области")
-
-        except Exception as e:
-            print(f"Ошибка в start_trace_selection: {e}")
-
-    def mousePressEvent(self, event):
-        """Обработка нажатия мыши"""
-        # Если в режиме выделения трассы - обрабатываем здесь, не передавая дальше
-        if hasattr(self, 'selection_mode') and self.selection_mode == "trace" and event.button() == Qt.LeftButton:
-            self.drag_start_pos = event.pos()
-            print(f"Начало выделения: {self.drag_start_pos.x()}, {self.drag_start_pos.y()}")
-            event.accept()  # Блокируем передачу события в OpenGL виджет
+    def load_image(self, image_array: np.ndarray):
+        """Загрузить изображение из numpy array"""
+        if image_array is None:
+            print("Ошибка: image_array is None")
             return
 
-        # Для всех остальных случаев - передаем дальше
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        """Обработка движения мыши"""
-        # Если в режиме выделения и зажата ЛКМ - обрабатываем здесь
-        if (hasattr(self, 'selection_mode') and
-                self.selection_mode == "trace" and
-                hasattr(self, 'drag_start_pos') and
-                self.drag_start_pos and
-                event.buttons() & Qt.LeftButton):
-
-            current_pos = event.pos()
-            width = abs(current_pos.x() - self.drag_start_pos.x())
-            height = abs(current_pos.y() - self.drag_start_pos.y())
-
-            if width > 0 or height > 0:
-                print(f"Выделение области: {width}x{height} пикселей")
-
-            event.accept()  # Блокируем передачу события
-            return
-
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event):
-        """Обработка отпускания кнопки мыши"""
-        # Если в режиме выделения - обрабатываем здесь
-        if (hasattr(self, 'selection_mode') and
-                self.selection_mode == "trace" and
-                hasattr(self, 'drag_start_pos') and
-                self.drag_start_pos and
-                event.button() == Qt.LeftButton):
-
-            current_pos = event.pos()
-            dx = abs(current_pos.x() - self.drag_start_pos.x())
-            dy = abs(current_pos.y() - self.drag_start_pos.y())
-
-            if dx > 10 and dy > 10:
-                x1 = min(self.drag_start_pos.x(), current_pos.x())
-                y1 = min(self.drag_start_pos.y(), current_pos.y())
-                x2 = max(self.drag_start_pos.x(), current_pos.x())
-                y2 = max(self.drag_start_pos.y(), current_pos.y())
-
-                bounds = (x1, y1, x2, y2)
-                self.finish_trace_selection(bounds)
-
-            self.drag_start_pos = None
-            event.accept()  # Блокируем передачу события
-            return
-
-        super().mouseReleaseEvent(event)
-
-    def finish_trace_selection(self, bounds):
-        """Завершает выделение трассы"""
         try:
-            # Проверяем атрибуты
-            if not hasattr(self, 'current_trace') or self.current_trace is None:
-                print("Нет текущей трассы для завершения выделения")
+            height, width = image_array.shape[:2]
+            print(f"Загрузка изображения: {width}x{height}, dtype={image_array.dtype}")
+
+            from PyQt5.QtGui import QImage
+
+            if len(image_array.shape) == 2:
+                bytes_per_line = width
+                img_data = image_array.astype(np.uint8).copy()
+                qimage = QImage(img_data.data, width, height, bytes_per_line, QImage.Format_Grayscale8)
+            else:
+                bytes_per_line = 3 * width
+                img_data = image_array.astype(np.uint8).copy()
+                qimage = QImage(img_data.data, width, height, bytes_per_line, QImage.Format_RGB888)
+
+            pixmap = QPixmap.fromImage(qimage)
+
+            if pixmap.isNull():
+                print("Ошибка: не удалось создать QPixmap")
                 return
 
-            # Обновляем трассу
-            self.current_trace.bounding_box = bounds
-            self.current_trace.is_editing = False
+            if self.pixmap_item:
+                self.scene.removeItem(self.pixmap_item)
 
-            # Выходим из режима выделения
-            if hasattr(self, 'selection_mode'):
-                self.selection_mode = None
+            self.pixmap_item = QGraphicsPixmapItem(pixmap)
+            self.scene.addItem(self.pixmap_item)
+            self.setSceneRect(QRectF(pixmap.rect()))
 
-            self.setCursor(Qt.ArrowCursor)
+            self.current_image = image_array
+            self.fitInView(self.pixmap_item, Qt.KeepAspectRatio)
+            self.current_zoom = 1.0
 
-            if hasattr(self, 'drag_start_pos'):
-                self.drag_start_pos = None
-
-            print(f"Трасса '{self.current_trace.name}' выделена в области: {bounds}")
-
-            # Сигнализируем о завершении
-            if hasattr(self, 'main_window') and self.main_window:
-                self.main_window.status_bar.showMessage(
-                    f"Трасса '{self.current_trace.name}' успешно выделена",
-                    5000
-                )
-
-                # Обновляем проект
-                if hasattr(self.main_window, 'project_updated'):
-                    self.main_window.project_updated.emit()
-
-            # Показываем сообщение
-            QMessageBox.information(
-                self,
-                "Готово",
-                f"Трасса '{self.current_trace.name}' успешно выделена.\n"
-                f"Область: {int(bounds[2] - bounds[0])}x{int(bounds[3] - bounds[1])} пикселей"
-            )
-
-            # Сбрасываем текущую трассу
-            self.current_trace = None
+            print("Изображение успешно загружено")
 
         except Exception as e:
-            print(f"Ошибка в finish_trace_selection: {e}")
+            print(f"Ошибка загрузки изображения: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def wheelEvent(self, event: QWheelEvent):
+        """Масштабирование колесиком мыши"""
+        if not self.pixmap_item:
+            event.accept()
+            return
+
+        zoom_in_factor = 1.25
+        zoom_out_factor = 1 / zoom_in_factor
+
+        if event.angleDelta().y() > 0:
+            factor = zoom_in_factor
+        else:
+            factor = zoom_out_factor
+
+        new_zoom = self.current_zoom * factor
+        if self.min_zoom <= new_zoom <= self.max_zoom:
+            self.scale(factor, factor)
+            self.current_zoom = new_zoom
+
+        event.accept()
+
+    def mousePressEvent(self, event: QMouseEvent):
+        """Обработка кликов мыши"""
+        if event.button() == Qt.LeftButton:
+            scene_pos = self.mapToScene(event.pos())
+
+            # Проверяем клик внутри растра
+            if self.pixmap_item:
+                rect = self.pixmap_item.boundingRect()
+                if not rect.contains(scene_pos):
+                    super().mousePressEvent(event)
+                    return
+
+            # Обработка в зависимости от режима
+            if self.mode == 'add_point':
+                self.add_point(scene_pos.x(), scene_pos.y())
+            elif self.mode == 'delete_point':
+                self.delete_nearest_point(scene_pos.x(), scene_pos.y())
+            elif self.mode == 'move_point':
+                self.start_move_point(scene_pos.x(), scene_pos.y())
+            elif self.mode == 'pan':
+                super().mousePressEvent(event)
+            else:
+                super().mousePressEvent(event)
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent):
+        """Обработка движения мыши"""
+        # Отправляем сигнал с координатами для статус-бара
+        scene_pos = self.mapToScene(event.pos())
+        if self.pixmap_item:
+            rect = self.pixmap_item.boundingRect()
+            if rect.contains(scene_pos):
+                self.mouse_moved.emit(scene_pos.x(), scene_pos.y())
+
+        # Перемещение точки
+        if self.mode == 'move_point' and self.dragging_point and self.dragging_point_idx >= 0:
+            scene_pos = self.mapToScene(event.pos())
+            if self.pixmap_item:
+                rect = self.pixmap_item.boundingRect()
+                x = max(rect.left(), min(rect.right(), scene_pos.x()))
+                y = max(rect.top(), min(rect.bottom(), scene_pos.y()))
+
+                if self.current_interval and self.dragging_point_idx < len(self.current_interval.points):
+                    point = self.current_interval.points[self.dragging_point_idx]
+                    point.x = x
+                    point.y = y
+                    self.update_display()
+        else:
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent):
+        """Обработка отпускания кнопки"""
+        if self.mode == 'move_point' and self.dragging_point:
+            self.dragging_point = False
+            self.dragging_point_idx = -1
+            self.save_to_history()
+        super().mouseReleaseEvent(event)
+
+    def add_point(self, x: float, y: float):
+        """Добавить точку оцифровки"""
+        if not self.current_trace:
+            print("Нет активной трассы")
+            return
+
+        if not self.current_interval:
+            from models.trace import Interval
+            import uuid
+            self.current_interval = Interval(
+                id=str(uuid.uuid4()),
+                trace_id=self.current_trace.id,
+                points=[]
+            )
+            self.current_trace.add_interval(self.current_interval)
+
+        # Проверяем границы
+        if self.pixmap_item:
+            rect = self.pixmap_item.boundingRect()
+            x = max(rect.left(), min(rect.right(), x))
+            y = max(rect.top(), min(rect.bottom(), y))
+
+        self.save_to_history()
+        self.current_interval.add_point(x, y)
+        self.update_display()
+
+    def delete_nearest_point(self, x: float, y: float, radius: float = 10.0):
+        """Удалить ближайшую точку"""
+        if not self.current_interval or not self.current_interval.points:
+            return
+
+        min_dist = float('inf')
+        min_idx = -1
+
+        for i, point in enumerate(self.current_interval.points):
+            dist = ((point.x - x) ** 2 + (point.y - y) ** 2) ** 0.5
+            if dist < min_dist and dist < radius:
+                min_dist = dist
+                min_idx = i
+
+        if min_idx >= 0:
+            self.save_to_history()
+            self.current_interval.remove_point(min_idx)
+            self.update_display()
+
+    def start_move_point(self, x: float, y: float, radius: float = 10.0):
+        """Начать перемещение точки"""
+        if not self.current_interval or not self.current_interval.points:
+            self.dragging_point = False
+            return
+
+        min_dist = float('inf')
+        self.dragging_point_idx = -1
+
+        for i, point in enumerate(self.current_interval.points):
+            dist = ((point.x - x) ** 2 + (point.y - y) ** 2) ** 0.5
+            if dist < min_dist and dist < radius:
+                min_dist = dist
+                self.dragging_point_idx = i
+
+        if self.dragging_point_idx >= 0:
+            self.save_to_history()
+            self.dragging_point = True
+        else:
+            self.dragging_point = False
+
+    def finish_current_interval(self) -> bool:
+        """Завершить текущий интервал"""
+        if self.current_interval and len(self.current_interval.points) > 0:
+            self.save_to_history()
+
+            # Создаем новый интервал
+            from models.trace import Interval
+            import uuid
+            new_interval = Interval(
+                id=str(uuid.uuid4()),
+                trace_id=self.current_trace.id if self.current_trace else "unknown",
+                points=[]
+            )
+
+            if self.current_trace:
+                self.current_trace.add_interval(new_interval)
+
+            self.current_interval = new_interval
+            self.update_display()
+            return True
+        return False
+
+    def save_to_history(self):
+        """Сохранить текущее состояние"""
+        if not self.current_interval:
+            return
+
+        points_copy = [(p.x, p.y, p.point_type) for p in self.current_interval.points]
+
+        self.history = self.history[:self.history_index + 1]
+        self.history.append(points_copy)
+        self.history_index = len(self.history) - 1
+
+    def undo(self):
+        """Отменить последнее действие"""
+        if self.history_index > 0 and self.current_interval:
+            self.history_index -= 1
+            self.restore_from_history()
+
+    def redo(self):
+        """Повторить действие"""
+        if self.history_index < len(self.history) - 1 and self.current_interval:
+            self.history_index += 1
+            self.restore_from_history()
+
+    def restore_from_history(self):
+        """Восстановить из истории"""
+        if not self.current_interval or self.history_index < 0:
+            return
+
+        points_data = self.history[self.history_index]
+        from models.trace import Point2D, PointType
+
+        self.current_interval.points = []
+        for x, y, ptype in points_data:
+            self.current_interval.points.append(Point2D(x, y, ptype))
+
+        self.update_display()
+
+    def update_display(self):
+        """Обновить отображение"""
+        if not self.pixmap_item:
+            return
+
+        # Очищаем все кроме изображения
+        items_list = list(self.scene.items())
+        for item in items_list:
+            if item != self.pixmap_item:
+                self.scene.removeItem(item)
+
+        # Рисуем трассы
+        if self.current_trace and self.current_trace.is_visible:
+            for interval in self.current_trace.intervals:
+                if interval and interval.points:
+                    self.draw_interval(interval)
+
+        # Рисуем другие видимые трассы
+        if hasattr(self.current_trace, 'project') and self.current_trace.project:
+            for trace in self.current_trace.project.traces:
+                if trace != self.current_trace and trace.is_visible:
+                    for interval in trace.intervals:
+                        if interval and interval.points:
+                            self.draw_interval(interval, color=QColor(150, 150, 150))
+
+    def draw_interval(self, interval, color=None):
+        """Нарисовать интервал"""
+        if not interval or not interval.points:
+            return
+
+        points = interval.points
+        num_points = len(points)
+
+        if num_points == 0:
+            return
+
+        line_color = color if color else self.line_color
+        point_color = color if color else self.point_color
+
+        # Рисуем линии
+        if self.show_lines and num_points > 1:
+            pen = QPen(line_color, self.line_width)
+            for i in range(num_points - 1):
+                self.scene.addLine(
+                    points[i].x, points[i].y,
+                    points[i + 1].x, points[i + 1].y,
+                    pen
+                )
+
+        # Рисуем точки
+        if self.show_points:
+            for point in points:
+                ellipse = self.scene.addEllipse(
+                    point.x - self.point_size / 2,
+                    point.y - self.point_size / 2,
+                    self.point_size, self.point_size,
+                    QPen(point_color), point_color
+                )
+
+    def set_mode(self, mode: str):
+        """Установить режим взаимодействия"""
+        self.mode = mode
+
+        if self.mode == 'pan':
+            self.setCursor(Qt.ArrowCursor)
+            self.setDragMode(QGraphicsView.ScrollHandDrag)
+        elif self.mode == 'add_point':
+            self.setCursor(Qt.CrossCursor)
+            self.setDragMode(QGraphicsView.NoDrag)
+        elif self.mode == 'delete_point':
+            self.setCursor(Qt.PointingHandCursor)
+            self.setDragMode(QGraphicsView.NoDrag)
+        elif self.mode == 'move_point':
+            self.setCursor(Qt.SizeAllCursor)
+            self.setDragMode(QGraphicsView.NoDrag)
+        else:
+            self.setCursor(Qt.ArrowCursor)
+            self.setDragMode(QGraphicsView.ScrollHandDrag)
+
+    def set_current_trace(self, trace):
+        """Установить текущую трассу"""
+        self.current_trace = trace
+
+        if trace and trace.intervals:
+            self.current_interval = trace.intervals[-1]
+        elif trace:
+            from models.trace import Interval
+            import uuid
+            self.current_interval = Interval(
+                id=str(uuid.uuid4()),
+                trace_id=trace.id,
+                points=[]
+            )
+            trace.add_interval(self.current_interval)
+        else:
+            self.current_interval = None
+
+        self.update_display()
+
+    def clear_current_interval(self):
+        """Очистить текущий интервал"""
+        self.current_interval = None
+        self.update_display()
+
+    def keyPressEvent(self, event):
+        """Обработка клавиш"""
+        if event.key() == Qt.Key_Plus or event.key() == Qt.Key_Equal:
+            factor = 1.25
+            new_zoom = self.current_zoom * factor
+            if new_zoom <= self.max_zoom:
+                self.scale(factor, factor)
+                self.current_zoom = new_zoom
+        elif event.key() == Qt.Key_Minus:
+            factor = 0.8
+            new_zoom = self.current_zoom * factor
+            if new_zoom >= self.min_zoom:
+                self.scale(factor, factor)
+                self.current_zoom = new_zoom
+        elif event.key() == Qt.Key_Home or event.key() == Qt.Key_F:
+            self.resetTransform()
+            if self.pixmap_item:
+                self.fitInView(self.pixmap_item, Qt.KeepAspectRatio)
+            self.current_zoom = 1.0
+        elif event.key() == Qt.Key_Space:
+            if self.mode != 'pan':
+                self.set_mode('pan')
+            else:
+                self.set_mode(self._prev_mode if hasattr(self, '_prev_mode') else 'add_point')
+        else:
+            super().keyPressEvent(event)

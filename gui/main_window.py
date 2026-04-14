@@ -1,743 +1,502 @@
-import sys
-import os
+from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+                             QToolBar, QAction, QStatusBar, QFileDialog,
+                             QInputDialog, QMessageBox, QLabel)
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QKeySequence
 from pathlib import Path
 
-from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
-                             QHBoxLayout, QSplitter, QFileDialog, QMessageBox,
-                             QToolBar, QAction, QDockWidget, QLabel, QStatusBar)
-from PyQt5.QtCore import Qt, QSettings, pyqtSignal
-from PyQt5.QtGui import QIcon, QPainter
-
+# Исправленные импорты
+from models.project import Project
+from models.trace import Trace, Interval, PointType
+from models.workspace_params import WorkspaceSettings
+from models.seismic_data import SeismicTrace, DigitizationInterval
+from core.digitizer_engine import DigitizerEngine
 from gui.raster_canvas import RasterCanvas
 from gui.controls_panel import ControlsPanel
-from core.project import DigitizationProject
-from models import RasterOrientation
-from models.raster_data import SeismogramRaster
-from gui.dialogs.import_dialog import ImportRasterDialog
-from gui.dialogs.export_dialog import ExportDialog
+
 
 class MainWindow(QMainWindow):
-    # Сигналы для обновления интерфейса
-    project_updated = pyqtSignal()
-
     def __init__(self):
         super().__init__()
-        self.project = DigitizationProject()  # Текущий проект
-        self.current_interval_type = "waveform"  # Тип создаваемого интервала по умолчанию
+        self.setWindowTitle("Seismograms Digitizer v1.0")
+        self.setGeometry(100, 100, 1200, 800)
 
-        # ИНИЦИАЛИЗИРУЕМ raster_canvas ПЕРЕД init_ui
-        self.raster_canvas = RasterCanvas(self)
+        self.current_project = None
+        self.workspace_settings = WorkspaceSettings()
 
-        self.raster_menu = None
-        self.traces_menu = None
-        self.finish_interval_action = None
-        self.clear_interval_action = None
-        self.time_marker_action = None
-        self.waveform_action = None
-        self.noise_action = None
+        self.setup_ui()
+        self.setup_menu()
+        self.setup_statusbar()
 
-        self.init_ui()
-        self.load_settings()
-
-    def init_ui(self):
-        self.setWindowTitle("Seismogram Digitizer [Новый проект]")
-        self.showMaximized()  # ПОЛНОЭКРАННЫЙ РЕЖИМ
-
-        # --- Центральный виджет ---
+    def setup_ui(self):
+        """Настройка пользовательского интерфейса"""
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
-        main_layout = QVBoxLayout(central_widget)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
 
-        # --- ТОЛЬКО ХОЛСТ НА ВСЕМ ЭКРАНЕ ---
-        main_layout.addWidget(self.raster_canvas)
+        layout = QHBoxLayout(central_widget)
 
-        # --- Создание меню ---
-        self.create_menu_bar()
+        # Холст для отображения растра
+        self.canvas = RasterCanvas()
+        layout.addWidget(self.canvas, stretch=3)
 
-        # --- Статусбар ---
-        self.status_bar = QStatusBar()
-        self.setStatusBar(self.status_bar)
-        self.status_bar.showMessage("Готово")
+        # Панель управления
+        self.controls_panel = ControlsPanel()
+        self.controls_panel.mode_changed.connect(self.on_mode_changed)
+        self.controls_panel.undo_requested.connect(self.canvas.undo)
+        self.controls_panel.redo_requested.connect(self.canvas.redo)
+        self.controls_panel.interpolate_requested.connect(self.interpolate_current_interval)
+        self.controls_panel.remove_trend_requested.connect(self.remove_trend_current_interval)
+        self.controls_panel.finish_interval_requested.connect(self.finish_current_interval)
+        self.controls_panel.manage_traces_requested.connect(self.show_trace_manager)
+        self.controls_panel.finish_trace_requested.connect(self.finish_current_trace)
 
-        # Подключаем сигналы
-        self.project_updated.connect(self.on_project_updated)
+        self.controls_panel.trace_selected.connect(self.on_trace_selected_from_selector)
 
-    def create_menu_bar(self):
+        layout.addWidget(self.controls_panel, stretch=1)
+
+        self.canvas.mouse_moved.connect(self.update_coordinates) # сигнал движения мыши после создания канваса
+
+    def setup_menu(self):
+        """Настройка меню"""
         menubar = self.menuBar()
 
-        # Меню "Файл"
-        file_menu = menubar.addMenu('&Файл')
+        # Меню File
+        file_menu = menubar.addMenu("Файл")
 
-        new_action = self.create_action('&Новый проект', self.new_project,
-                                        'Ctrl+N', 'new.png')
+        new_action = QAction("Новый проект", self)
+        new_action.setShortcut(QKeySequence.New)
+        new_action.triggered.connect(self.new_project)
         file_menu.addAction(new_action)
 
-        open_action = self.create_action('&Открыть проект...', self.open_project,
-                                         'Ctrl+O', 'open.png')
+        open_action = QAction("Открыть проект...", self)
+        open_action.setShortcut(QKeySequence.Open)
+        open_action.triggered.connect(self.open_project)
         file_menu.addAction(open_action)
 
-        import_raster_action = self.create_action('&Импорт растра...',
-                                                  self.import_raster,
-                                                  'Ctrl+I', 'import.png')
-        file_menu.addAction(import_raster_action)
-
-        file_menu.addSeparator()
-
-        save_action = self.create_action('&Сохранить проект', self.save_project,
-                                         'Ctrl+S', 'save.png')
+        save_action = QAction("Сохранить проект", self)
+        save_action.setShortcut(QKeySequence.Save)
+        save_action.triggered.connect(self.save_project)
         file_menu.addAction(save_action)
 
-        save_as_action = self.create_action('Сохранить проект &как...',
-                                            self.save_project_as,
-                                            'Ctrl+Shift+S', 'save_as.png')
+        save_as_action = QAction("Сохранить как...", self)
+        save_as_action.setShortcut(QKeySequence.SaveAs)
+        save_as_action.triggered.connect(self.save_project_as)
         file_menu.addAction(save_as_action)
 
         file_menu.addSeparator()
 
-        export_menu = file_menu.addMenu('&Экспорт данных')
-        export_sac_action = self.create_action('В формат &SAC...',
-                                               self.export_to_sac,
-                                               '', 'export.png')
-        export_menu.addAction(export_sac_action)
+        import_raster_action = QAction("Импортировать растер...", self)
+        import_raster_action.triggered.connect(self.import_raster)
+        file_menu.addAction(import_raster_action)
 
-        export_miniseed_action = self.create_action('В формат &MiniSEED...',
-                                                    self.export_to_miniseed,
-                                                    '', 'export.png')
-        export_menu.addAction(export_miniseed_action)
+        export_sac_action = QAction("Экспорт в SAC...", self)
+        export_sac_action.triggered.connect(self.export_sac)
+        file_menu.addAction(export_sac_action)
 
-        export_csv_action = self.create_action('В формат &CSV...',
-                                               self.export_to_csv,
-                                               '', 'export.png')
-        export_menu.addAction(export_csv_action)
+        # Меню Edit
+        edit_menu = menubar.addMenu("Правка")
 
-        file_menu.addSeparator()
-        exit_action = self.create_action('&Выход', self.close,
-                                         'Ctrl+Q', 'exit.png')
-        file_menu.addAction(exit_action)
+        undo_action = QAction("Отменить", self)
+        undo_action.setShortcut(QKeySequence.Undo)
+        undo_action.triggered.connect(self.canvas.undo)
+        edit_menu.addAction(undo_action)
 
-        # Меню "Растр" - ТОЛЬКО ПОСЛЕ ЗАГРУЗКИ ИЗОБРАЖЕНИЯ
-        self.raster_menu = menubar.addMenu('&Растр')
-        self.raster_menu.setEnabled(False)  # Изначально отключено
+        redo_action = QAction("Повторить", self)
+        redo_action.setShortcut(QKeySequence.Redo)
+        redo_action.triggered.connect(self.canvas.redo)
+        edit_menu.addAction(redo_action)
 
-        # Создаем действия для меню "Растр" (будут активированы после загрузки)
-        self.raster_settings_action = self.create_action('&Настройки растра...',
-                                                         self.show_raster_settings,
-                                                         '', 'settings.png')
-        self.raster_menu.addAction(self.raster_settings_action)
+        edit_menu.addSeparator()
 
-        self.raster_menu.addSeparator()
+        settings_action = QAction("Настройки проекта...", self)
+        settings_action.triggered.connect(self.project_settings)
+        edit_menu.addAction(settings_action)
 
-        self.zoom_in_action = self.create_action('&Увеличить', self.zoom_in,
-                                                 'Ctrl++', 'zoom_in.png')
-        self.raster_menu.addAction(self.zoom_in_action)
+        # Меню View
+        view_menu = menubar.addMenu("Вид")
 
-        self.zoom_out_action = self.create_action('&Уменьшить', self.zoom_out,
-                                                  'Ctrl+-', 'zoom_out.png')
-        self.raster_menu.addAction(self.zoom_out_action)
+        zoom_in_action = QAction("Приблизить", self)
+        zoom_in_action.setShortcut(QKeySequence.ZoomIn)
+        zoom_in_action.triggered.connect(lambda: self.canvas.scale(1.2, 1.2))
+        view_menu.addAction(zoom_in_action)
 
-        self.zoom_original_action = self.create_action('Исходный &размер',
-                                                       self.zoom_original,
-                                                       'Ctrl+0', 'zoom_original.png')
-        self.raster_menu.addAction(self.zoom_original_action)
+        zoom_out_action = QAction("Отдалить", self)
+        zoom_out_action.setShortcut(QKeySequence.ZoomOut)
+        zoom_out_action.triggered.connect(lambda: self.canvas.scale(0.8, 0.8))
+        view_menu.addAction(zoom_out_action)
 
-        self.raster_menu.addSeparator()
+        fit_view_action = QAction("Подогнать под размер", self)
+        fit_view_action.setShortcut(QKeySequence("Ctrl+F"))
+        fit_view_action.triggered.connect(self.fit_view)
+        view_menu.addAction(fit_view_action)
 
-        self.brightness_action = self.create_action('&Яркость...',
-                                                    self.adjust_brightness,
-                                                    '', 'brightness.png')
-        self.raster_menu.addAction(self.brightness_action)
+    def setup_statusbar(self):
+        """Настройка строки состояния"""
+        self.statusbar = QStatusBar()
+        self.setStatusBar(self.statusbar)
 
-        self.contrast_action = self.create_action('&Контрастность...',
-                                                  self.adjust_contrast,
-                                                  '', 'contrast.png')
-        self.raster_menu.addAction(self.contrast_action)
+        # Добавляем информационные метки
+        self.zoom_label = QLabel("Масштаб: 100%")
+        self.mode_label = QLabel("Режим: Добавление точек")
+        self.coord_label = QLabel("Координаты: -")
 
-        self.gamma_action = self.create_action('&Гамма-коррекция...',
-                                               self.adjust_gamma,
-                                               '', 'gamma.png')
-        self.raster_menu.addAction(self.gamma_action)
+        self.statusbar.addWidget(self.zoom_label)
+        self.statusbar.addWidget(self.mode_label)
+        self.statusbar.addWidget(self.coord_label)
 
-        self.raster_menu.addSeparator()
+        self.statusbar.showMessage("Готов к работе")
 
-        self.invert_action = self.create_action('&Инвертировать цвета',
-                                                self.invert_colors,
-                                                'Ctrl+Shift+I', 'invert.png')
-        self.invert_action.setCheckable(True)
-        self.raster_menu.addAction(self.invert_action)
-
-        # Меню "Трассы"
-        self.traces_menu = menubar.addMenu('&Трассы')
-        self.traces_menu.setEnabled(False)  # Изначально отключено
-
-        create_trace_action = self.create_action('Создать &трассу',
-                                                 self.create_trace,
-                                                 'Ctrl+T', 'trace.png')
-        self.traces_menu.addAction(create_trace_action)
-
-        auto_detect_action = self.create_action('&Автоопределение трасс',
-                                                self.auto_detect_traces,
-                                                '', 'auto_detect.png')
-        self.traces_menu.addAction(auto_detect_action)
-
-        manage_traces_action = self.create_action('Управление трассами...',
-                                                  self.show_trace_manager,
-                                                  'Ctrl+M', 'manage.png')
-        self.traces_menu.addAction(manage_traces_action)
-
-        self.traces_menu.addSeparator()
-
-        self.interpolate_action = self.create_action('&Интерполировать все',
-                                                     self.interpolate_all,
-                                                     'Ctrl+P', 'interpolate.png')
-        self.traces_menu.addAction(self.interpolate_action)
-
-        # Меню "Инструменты"
-        tools_menu = menubar.addMenu('&Инструменты')
-
-        interval_menu = tools_menu.addMenu('&Тип интервала')
-
-        self.time_marker_action = self.create_action('&Метка времени',
-                                                     lambda: self.set_interval_type('time_marker'),
-                                                     '', 'time_marker.png')
-        self.time_marker_action.setCheckable(True)
-        interval_menu.addAction(self.time_marker_action)
-
-        self.waveform_action = self.create_action('&Волновая форма',
-                                                  lambda: self.set_interval_type('waveform'),
-                                                  '', 'waveform.png')
-        self.waveform_action.setCheckable(True)
-        self.waveform_action.setChecked(True)  # По умолчанию
-        interval_menu.addAction(self.waveform_action)
-
-        self.noise_action = self.create_action('&Помеха',
-                                               lambda: self.set_interval_type('noise'),
-                                               '', 'noise.png')
-        self.noise_action.setCheckable(True)
-        interval_menu.addAction(self.noise_action)
-
-        # Группа для радио-кнопок
-        from PyQt5.QtWidgets import QActionGroup
-        self.interval_type_group = QActionGroup(self)
-        self.interval_type_group.addAction(self.time_marker_action)
-        self.interval_type_group.addAction(self.waveform_action)
-        self.interval_type_group.addAction(self.noise_action)
-
-        tools_menu.addSeparator()
-
-        # Дополнительные инструменты оцифровки
-        self.finish_interval_action = self.create_action('&Завершить интервал',
-                                                         self.finish_current_interval,
-                                                         'Ctrl+Enter', 'finish.png')
-        tools_menu.addAction(self.finish_interval_action)
-
-        self.clear_interval_action = self.create_action('&Очистить интервал',
-                                                        self.clear_current_interval,
-                                                        'Del', 'clear.png')
-        tools_menu.addAction(self.clear_interval_action)
-
-    def create_action(self, text, slot, shortcut=None, icon_name=None):
-        from PyQt5.QtWidgets import QAction
-        from PyQt5.QtGui import QIcon
-
-        action = QAction(text, self)
-        action.triggered.connect(slot)
-
-        if shortcut:
-            action.setShortcut(shortcut)
-
-        if icon_name:
-            # Пытаемся загрузить иконку из ресурсов или файла
-            try:
-                # Здесь можно добавить загрузку реальных иконок
-                pass
-            except:
-                pass
-
-        return action
-
-    def enable_raster_menu(self, enabled=True):
-        """Включает/выключает меню 'Растр' и 'Трассы'."""
-        # Включаем меню "Растр"
-        self.raster_menu.setEnabled(enabled)
-
-        # Включаем меню "Трассы"
-        self.traces_menu.setEnabled(enabled)
-
-        # Также включаем действия в меню "Инструменты"
-        self.finish_interval_action.setEnabled(enabled)
-        self.clear_interval_action.setEnabled(enabled)
-
-        # Включаем тип интервалов
-        self.time_marker_action.setEnabled(enabled)
-        self.waveform_action.setEnabled(enabled)
-        self.noise_action.setEnabled(enabled)
-
-    # --- Слоты для меню ---
     def new_project(self):
-        if self.maybe_save():
-            self.project = DigitizationProject()
-            self.raster_canvas.clear_scene()
-            self.setWindowTitle("Seismogram Digitizer")
-            self.update_project_info()
-            self.status_bar.showMessage("Создан новый проект", 3000)
+        """Создать новый проект"""
+        name, ok = QInputDialog.getText(self, "Новый проект", "Название проекта:")
+        if ok and name:
+            self.current_project = Project(name=name)
+            self.current_project.traces = []
+            self.canvas.current_trace = None
+            self.canvas.current_interval = None
+            self.canvas.update_display()
+            self.update_trace_selector()
+            self.statusbar.showMessage(f"Создан проект: {name}")
 
     def open_project(self):
-        if not self.maybe_save():
-            return
+        """Открыть существующий проект"""
         filepath, _ = QFileDialog.getOpenFileName(
-            self, "Открыть проект", "", "Trace Files (*.trace);;All files (*.*)"
+            self, "Открыть проект", "", "Trace Project (*.trace)"
         )
         if filepath:
-            try:
-                self.project = DigitizationProject.load(Path(filepath))
-                # Загружаем изображение в растр
-                if self.project.raster:
-                    self.project.raster.load()
-                    self.raster_canvas.set_raster(self.project.raster)
+            self.current_project = Project.load(Path(filepath))
+            if self.current_project.raster_data is not None:
+                self.canvas.load_image(self.current_project.raster_data)
 
-                self.setWindowTitle(f"Seismogram Digitizer [{os.path.basename(filepath)}]")
-                self.update_project_info()
-                self.status_bar.showMessage(f"Проект загружен: {filepath}", 3000)
+            # Делаем все трассы видимыми
+            for trace in self.current_project.traces:
+                trace.is_visible = True
+                trace.is_editing = False
 
-            except Exception as e:
-                QMessageBox.critical(self, "Ошибка",
-                                     f"Не удалось загрузить проект:\n{str(e)}")
+            # Очищаем текущую трассу на канвасе
+            self.canvas.current_trace = None
+            self.canvas.current_interval = None
 
-    def import_raster(self):
-        try:
-            dialog = ImportRasterDialog(self)
-            if dialog.exec_():
-                params = dialog.get_parameters()
-                filepath = params.get('filepath')
+            # ОБНОВЛЯЕМ СЕЛЕКТОР
+            self.update_trace_selector()
 
-                if filepath and os.path.exists(filepath):
-                    try:
-                        # Показываем сообщение о загрузке
-                        self.status_bar.showMessage(f"Загрузка {os.path.basename(filepath)}...")
-                        QApplication.processEvents()  # Обновляем GUI
+            # Устанавливаем "Все трассы" как активный пункт
+            self.controls_panel.trace_selector.setCurrentIndex(0)
 
-                        # Создаем растр с поддержкой тайлов
-                        self.project.raster = SeismogramRaster(
-                            image_path=filepath,
-                            dpi=params['dpi'],
-                            color_mode=params['color_mode'],
-                            use_tiling=True,  # Включаем тайлинг
-                            tile_size=(1024, 1024)  # Размер тайлов
-                        )
+            # Обновляем отображение
+            self.canvas.update_display()
 
-                        # Загружаем только метаданные
-                        self.project.raster.load(load_full_image=False)
-
-                        # Получаем информацию об изображении
-                        info = self.project.raster.get_image_info()
-
-                        # Пробуем загрузить изображение в холст
-                        success = self.raster_canvas.set_raster(self.project.raster)
-                        if success:
-                            # Включаем меню "Растр"
-                            self.enable_raster_menu(True)
-
-                            # Показываем информацию
-                            size_str = f"{info['size'][0]}x{info['size'][1]}"
-                            self.status_bar.showMessage(
-                                f"Растр загружен: {os.path.basename(filepath)} ({size_str})",
-                                5000
-                            )
-                            self.update_project_info()
-                        else:
-                            QMessageBox.warning(self, "Предупреждение",
-                                                "Не удалось отобразить изображение")
-
-                    except Exception as e:
-                        QMessageBox.critical(self, "Ошибка",
-                                             f"Не удалось загрузить растр:\n{str(e)}")
-
-        except Exception as e:
-            QMessageBox.critical(self, "Ошибка",
-                                 f"Ошибка при импорте:\n{str(e)}")
-
-        except Exception as e:
-            QMessageBox.critical(self, "Ошибка",
-                                 f"Ошибка при импорте:\n{str(e)}\n"
-                                 f"Убедитесь, что OpenGL работает на вашей системе.")
+            self.statusbar.showMessage(f"Загружен проект: {self.current_project.name}")
 
     def save_project(self):
-        if not self.project.project_path:
-            self.save_project_as()
-        else:
-            success = self.project.save(self.project.project_path)
-            if success:
-                self.status_bar.showMessage("Проект сохранен", 3000)
-                self.update_project_info()
+        """Сохранить проект"""
+        if self.current_project:
+            if not self.current_project.filepath:
+                self.save_project_as()
             else:
-                QMessageBox.warning(self, "Ошибка", "Не удалось сохранить проект")
+                self.current_project.save()
+                self.statusbar.showMessage(f"Проект сохранен: {self.current_project.name}")
 
     def save_project_as(self):
-        filepath, _ = QFileDialog.getSaveFileName(
-            self, "Сохранить проект как", "", "Trace Files (*.trace);;All files (*.*)"
+        """Сохранить проект как..."""
+        if self.current_project:
+            filepath, _ = QFileDialog.getSaveFileName(
+                self, "Сохранить проект", f"{self.current_project.name}.trace", "Trace Project (*.trace)"
+            )
+            if filepath:
+                self.current_project.filepath = Path(filepath)
+                self.current_project.save()
+                self.statusbar.showMessage(f"Проект сохранен: {filepath}")
+
+    def import_raster(self):
+        """Импортировать растер"""
+        filepath, _ = QFileDialog.getOpenFileName(
+            self, "Импортировать растер",
+            "", "Images (*.png *.jpg *.jpeg *.bmp *.tiff *.tif)"
         )
+
+        if filepath and self.current_project:
+            from PIL import Image
+            import numpy as np
+
+            # Открываем изображение
+            img = Image.open(filepath)
+            print(f"Загружен файл: {filepath}")
+            print(f"Режим: {img.mode}, Размер: {img.size}")
+
+            # Конвертируем в RGB или Grayscale
+            if img.mode == 'L':
+                raster_data = np.array(img, dtype=np.uint8)
+            else:
+                # Конвертируем в RGB
+                img = img.convert('RGB')
+                raster_data = np.array(img, dtype=np.uint8)
+
+            print(f"Shape массива: {raster_data.shape}, dtype: {raster_data.dtype}")
+
+            self.current_project.raster_data = raster_data
+            self.current_project.raster_path = Path(filepath)
+
+            # Загружаем изображение в canvas
+            self.canvas.load_image(raster_data)
+            self.statusbar.showMessage(f"Загружен растер: {filepath}")
+
+    def export_sac(self):
+        """Экспорт в SAC формат"""
+        if not self.current_project or not self.current_project.traces:
+            QMessageBox.warning(self, "Ошибка", "Нет данных для экспорта")
+            return
+
+        filepath, _ = QFileDialog.getSaveFileName(
+            self, "Экспорт в SAC", "", "SAC Files (*.sac)"
+        )
+
         if filepath:
-            if not filepath.endswith('.trace'):
-                filepath += '.trace'
-            success = self.project.save(Path(filepath))
-            if success:
-                self.setWindowTitle(f"Seismogram Digitizer [{os.path.basename(filepath)}]")
-                self.status_bar.showMessage("Проект сохранен", 3000)
-                self.update_project_info()
-            else:
-                QMessageBox.warning(self, "Ошибка", "Не удалось сохранить проект")
+            # TODO: Реализовать экспорт в SAC через obspy или вручную
+            self.statusbar.showMessage(f"Экспорт в SAC: {filepath}")
+            QMessageBox.information(self, "Информация", "Экспорт в SAC будет реализован в следующей версии")
 
-    def show_raster_settings(self):
-        """Показывает диалог настроек растра."""
+    def fit_view(self):
+        """Подогнать изображение под размер окна"""
+        if self.canvas.pixmap_item:
+            self.canvas.fitInView(self.canvas.pixmap_item, Qt.KeepAspectRatio)
+
+    def project_settings(self):
+        """Настройки проекта"""
         from gui.dialogs.raster_settings_dialog import RasterSettingsDialog
+        dialog = RasterSettingsDialog(self.workspace_settings, self)
+        if dialog.exec_():
+            # Обновляем настройки
+            self.workspace_settings = dialog.get_settings()
+            self.statusbar.showMessage("Настройки проекта обновлены")
 
-        dialog = RasterSettingsDialog(self)
-        dialog.settings_changed.connect(self.apply_raster_settings)
-        dialog.exec_()
+    def interpolate_current_interval(self):
+        """Интерполяция текущего интервала"""
+        if self.canvas.current_interval and len(self.canvas.current_interval.points) >= 2:
+            from core.digitizer_engine import DigitizerEngine
+            x_interp, y_interp = DigitizerEngine.interpolate_interval(
+                self.canvas.current_interval,
+                num_points=500
+            )
+            self.statusbar.showMessage(f"Интерполяция выполнена: {len(x_interp)} точек")
+            # TODO: Отобразить интерполированную кривую
+        else:
+            QMessageBox.warning(self, "Ошибка", "Недостаточно точек для интерполяции (нужно минимум 2)")
 
-    def apply_raster_settings(self, settings):
-        """Применяет настройки растра."""
-        # Применяем настройки к проекту
-        if self.project:
-            # Ориентация
-            if settings['orientation'] == 0:
-                self.project.settings.raster_orientation = RasterOrientation.HORIZONTAL
-            else:
-                self.project.settings.raster_orientation = RasterOrientation.VERTICAL
+    def remove_trend_current_interval(self):
+        """Удалить тренд текущего интервала"""
+        if self.canvas.current_interval and len(self.canvas.current_interval.points) >= 2:
+            from core.digitizer_engine import DigitizerEngine
+            corrected_points = DigitizerEngine.remove_trend(
+                self.canvas.current_interval.points,
+                degree=1
+            )
+            self.canvas.current_interval.points = corrected_points
+            self.canvas.update_display()
+            self.statusbar.showMessage("Тренд удален")
+        else:
+            QMessageBox.warning(self, "Ошибка", "Недостаточно точек для удаления тренда")
 
-            # Временные параметры
-            self.project.settings.time_start = settings['time_start']
-            self.project.settings.time_end = settings['time_end']
-            self.project.settings.export_sampling_rate = settings['sampling_rate']
+    def update_coordinates(self, x, y):
+        """Обновление отображения координат"""
+        self.coord_label.setText(f"Координаты: ({x:.1f}, {y:.1f})")
 
-            # Настройки интерполяции
-            self.project.settings.default_interpolation_order = settings['poly_order']
-            self.project.settings.auto_interpolate = settings['auto_interpolate']
-            self.project.settings.show_grid = settings['show_grid']
-
-            # Применяем настройки улучшения к холсту
-            if hasattr(self.raster_canvas, 'gl_widget'):
-                self.raster_canvas.gl_widget.brightness = settings['brightness']
-                self.raster_canvas.gl_widget.contrast = settings['contrast']
-                self.raster_canvas.gl_widget.gamma = settings['gamma']
-                self.raster_canvas.gl_widget.invert_colors = settings['invert_colors']
-
-                if settings['threshold_enabled']:
-                    self.raster_canvas.gl_widget.set_threshold(
-                        int(settings['threshold']), True
-                    )
-
-                # Перерисовываем
-                self.raster_canvas.gl_widget.update()
-
-        self.status_bar.showMessage("Настройки растра применены", 3000)
-
-    def adjust_brightness(self):
-        """Настройка яркости."""
-        from PyQt5.QtWidgets import QInputDialog
-        value, ok = QInputDialog.getDouble(self, "Яркость",
-                                           "Яркость (%):", 100, 10, 500, 1)
-        if ok and hasattr(self.raster_canvas, 'gl_widget'):
-            self.raster_canvas.gl_widget.brightness = value / 100.0
-            self.raster_canvas.gl_widget.update()
-
-    def adjust_contrast(self):
-        """Настройка контрастности."""
-        from PyQt5.QtWidgets import QInputDialog
-        value, ok = QInputDialog.getDouble(self, "Контрастность",
-                                           "Контрастность (%):", 100, 10, 500, 1)
-        if ok and hasattr(self.raster_canvas, 'gl_widget'):
-            self.raster_canvas.gl_widget.contrast = value / 100.0
-            self.raster_canvas.gl_widget.update()
-
-    def adjust_gamma(self):
-        """Настройка гаммы."""
-        from PyQt5.QtWidgets import QInputDialog
-        value, ok = QInputDialog.getDouble(self, "Гамма-коррекция",
-                                           "Значение гаммы:", 1.0, 0.1, 5.0, 1)
-        if ok and hasattr(self.raster_canvas, 'gl_widget'):
-            self.raster_canvas.gl_widget.gamma = value
-            self.raster_canvas.gl_widget.update()
-
-    def invert_colors(self):
-        """Инвертирует цвета."""
-        if hasattr(self.raster_canvas, 'gl_widget'):
-            self.raster_canvas.gl_widget.invert_colors = self.invert_action.isChecked()
-            self.raster_canvas.gl_widget.update()
+    def on_mode_changed(self, mode: str):
+        """Обработка смены режима"""
+        if mode == 'digitize':
+            # Включаем режим оцифровки, но инструменты пока не активны
+            self.canvas.set_mode('digitize')
+            self.controls_panel.set_digitize_tools_enabled(True)
+        elif mode == 'pan':
+            self.canvas.set_mode('pan')
+            self.controls_panel.set_digitize_tools_enabled(False)
+        else:
+            # add_point, delete_point, move_point
+            self.canvas.set_mode(mode)
+            # Остаемся в режиме оцифровки
+            self.controls_panel.set_digitize_tools_enabled(True)
 
     def finish_current_interval(self):
-        """Завершает текущий интервал."""
-        if self.raster_canvas:
-            interval_type = self.current_interval_type
-            interval = self.raster_canvas.finish_current_interval(interval_type)
-            if interval and self.project:
-                self.project.loose_intervals.append(interval)
-                self.project_updated.emit()
-
-    def clear_current_interval(self):
-        """Очищает текущий интервал."""
-        if self.raster_canvas:
-            self.raster_canvas.clear_current_interval()
-
-    def export_data(self):
-        """Общий диалог экспорта."""
-        if not self.project or (not self.project.traces and not self.project.loose_intervals):
-            QMessageBox.warning(self, "Предупреждение", "Нет данных для экспорта")
-            return
-
-        dialog = ExportDialog(self, format_type='SAC')
-        dialog.exec_()
-
-    def export_to_sac(self):
-        from gui.dialogs.export_dialog import ExportDialog
-        dialog = ExportDialog(self, format_type='SAC')
-        dialog.exec_()
-
-    def export_to_miniseed(self):
-        from gui.dialogs.export_dialog import ExportDialog
-        dialog = ExportDialog(self, format_type='MiniSEED')
-        dialog.exec_()
-
-    def export_to_csv(self):
-        from gui.dialogs.export_dialog import ExportDialog
-        dialog = ExportDialog(self, format_type='CSV')
-        dialog.exec_()
-
-    def undo(self):
-        self.status_bar.showMessage("Отмена - будет реализовано", 2000)
-
-    def redo(self):
-        self.status_bar.showMessage("Повтор - будет реализовано", 2000)
-
-    def delete_selected(self):
-        self.status_bar.showMessage("Удаление - будет реализовано", 2000)
-
-    def create_trace(self):
-        """Создает новую трассу - простой вариант без немедленного выделения"""
-        if not self.project.raster:
-            QMessageBox.warning(self, "Предупреждение",
-                                "Сначала загрузите сейсмограмму через меню 'Файл → Импорт растра'")
-            return
-
-        try:
-            # Простой диалог для ввода названия трассы
-            from PyQt5.QtWidgets import QInputDialog, QLineEdit
-            from models.trace import Trace
-
-            # Генерируем предложение для названия
-            default_name = f"Трасса {len(self.project.traces) + 1}"
-
-            # Запрашиваем название у пользователя
-            name, ok = QInputDialog.getText(
-                self,
-                "Создание трассы",
-                "Введите название трассы:",
-                QLineEdit.Normal,
-                default_name
-            )
-
-            if ok and name.strip():
-                # Создаем объект трассы
-                new_trace = Trace(name=name.strip())
-
-                # Инициализируем необходимые атрибуты
-                new_trace.intervals = []
-                new_trace.is_editing = False
-                new_trace.bounding_box = None
-
-                # Добавляем трассу в проект
-                if hasattr(self.project, 'add_trace'):
-                    self.project.add_trace(new_trace)
-                else:
-                    # Если метода add_trace нет, добавляем напрямую
-                    if not hasattr(self.project, 'traces'):
-                        self.project.traces = []
-                    self.project.traces.append(new_trace)
-
-                # Обновляем интерфейс
-                self.project_updated.emit()
-
-                # Показываем сообщение об успехе
-                self.status_bar.showMessage(f"Создана трасса: {name.strip()}", 3000)
-
-                # Открываем диалог управления трассами для дальнейших действий
-                self.show_trace_manager()
-
-        except Exception as e:
-            QMessageBox.critical(self, "Ошибка",
-                                 f"Не удалось создать трассу:\n{str(e)}")
-            import traceback
-            traceback.print_exc()
+        """Завершить текущий интервал оцифровки"""
+        if self.canvas.finish_current_interval():
+            self.statusbar.showMessage("Текущий интервал завершен. Можно начинать новую линию.")
+        else:
+            self.statusbar.showMessage("Нет активного интервала для завершения")
 
     def show_trace_manager(self):
-        """Показывает диалог управления трассами"""
-        if not self.project.raster:
-            QMessageBox.warning(self, "Предупреждение",
-                                "Сначала загрузите сейсмограмму через меню 'Файл → Импорт растра'")
+        """Показать диалог управления трассами"""
+        if not self.current_project:
+            QMessageBox.warning(self, "Ошибка", "Сначала создайте или откройте проект")
+            return
+
+        if self.current_project.raster_data is None:
+            QMessageBox.warning(self, "Ошибка", "Сначала загрузите растер")
             return
 
         from gui.dialogs.trace_manager_dialog import TraceManagerDialog
-        dialog = TraceManagerDialog(self.project, self)
-
-        # Подключаем сигналы
-        dialog.trace_created.connect(self.on_trace_created)
-        dialog.start_trace_selection.connect(self.start_trace_selection_mode)
-
+        dialog = TraceManagerDialog(self.current_project, self)
+        dialog.start_trace_selection.connect(self.start_trace_selection)
+        dialog.trace_visibility_changed.connect(self.on_visibility_changed)  # Добавить эту строку
         dialog.exec_()
 
-    def start_trace_selection_mode(self, trace):
-        """Включает режим выделения трассы на холсте"""
-        self.current_trace = trace
-        if self.raster_canvas:
-            # Просто активируем режим, без изменения масштаба
-            self.raster_canvas.start_trace_selection(trace)
-            self.status_bar.showMessage(f"Режим выделения трассы: {trace.name}. Выделите область на изображении")
+    def on_visibility_changed(self):
+        """Обработка изменения видимости трасс"""
+        if self.current_project:
+            self.update_trace_selector()
+            self.canvas.update_display()
 
-    def on_trace_created(self, trace):
-        """Обработка создания трассы"""
-        self.project_updated.emit()
+    def hide_trace(self, trace):
+        """Спрятать трассу (если trace=None, то скрыть все)"""
+        if trace is None:
+            # Скрываем все трассы
+            for t in self.current_project.traces:
+                t.is_visible = False
+        else:
+            # Проверяем, существует ли еще трасса в проекте
+            if trace in self.current_project.traces:
+                trace.is_visible = False
 
-    def auto_detect_traces(self):
-        from core.trace_manager import TraceManager
-        from PyQt5.QtWidgets import QInputDialog
+        # Обновляем отображение
+        self.canvas.update_display()
 
-        num_traces, ok = QInputDialog.getInt(self, "Автоопределение трасс",
-                                             "Количество трасс:", 3, 1, 10, 1)
-        if ok:
-            trace_manager = TraceManager(self.project)
-            traces = trace_manager.auto_detect_traces(num_traces)
-            for trace in traces:
-                self.project.add_trace(trace)
-            self.traces_panel.update_trace_list()
-            self.status_bar.showMessage(f"Создано {len(traces)} трасс", 3000)
-            self.project_updated.emit()
+        # Принудительно запускаем сборщик мусора
+        import gc
+        gc.collect()
 
-    def interpolate_all(self):
-        if not self.project:
+        self.statusbar.showMessage("Трассы скрыты")
+
+    def show_all_traces(self):
+        """Показать все трассы"""
+        for trace in self.current_project.traces:
+            trace.is_visible = True
+
+        self.canvas.update_display()
+        self.update_trace_selector()
+        self.statusbar.showMessage("Все трассы показаны")
+
+    def start_trace_selection(self, trace):
+        """Показать трассу на изображении"""
+        # Снимаем флаг редактирования со всех трасс
+        for t in self.current_project.traces:
+            t.is_editing = False
+
+        trace.is_editing = True
+        trace.is_visible = True
+        trace.project = self.current_project
+
+        self.canvas.set_current_trace(trace)
+        self.update_trace_selector()
+
+        index = self.controls_panel.trace_selector.findData(trace.id)
+        if index >= 0:
+            self.controls_panel.trace_selector.setCurrentIndex(index)
+
+        self.canvas.update_display()
+
+    def finish_current_trace(self):
+        """Завершить текущую трассу"""
+        if not self.current_project:
+            self.statusbar.showMessage("Нет активного проекта")
             return
 
-        success_count = 0
-        total_count = 0
+        current_trace = self.canvas.current_trace
+        if not current_trace:
+            self.statusbar.showMessage("Нет активной трассы для завершения")
+            return
 
-        # Интервалы в трассах
-        for trace in self.project.traces:
-            for interval in trace.intervals:
-                total_count += 1
-                if self.project._interpolate_interval(interval):
-                    success_count += 1
+        # Проверяем, есть ли точки в текущей трассе
+        total_points = sum(len(interval.points) for interval in current_trace.intervals)
 
-        # Свободные интервалы
-        for interval in self.project.loose_intervals:
-            total_count += 1
-            if self.project._interpolate_interval(interval):
-                success_count += 1
-
-        self.status_bar.showMessage(
-            f"Интерполировано {success_count} из {total_count} интервалов",
-            3000)
-        self.project_updated.emit()
-
-    def zoom_in(self):
-        if hasattr(self.raster_canvas, 'zoom_in'):
-            self.raster_canvas.zoom_in()
-            self.update_zoom_label()
-
-    def zoom_out(self):
-        if hasattr(self.raster_canvas, 'zoom_out'):
-            self.raster_canvas.zoom_out()
-            self.update_zoom_label()
-
-    def zoom_original(self):
-        if hasattr(self.raster_canvas, 'zoom_original'):
-            self.raster_canvas.zoom_original()
-            self.update_zoom_label()
-
-    def fit_to_view(self):
-        if hasattr(self.raster_canvas, 'fit_to_view'):
-            self.raster_canvas.fit_to_view()
-            self.update_zoom_label()
-
-    def update_zoom_label(self):
-        """Обновляет отображение масштаба."""
-        if hasattr(self.raster_canvas, 'zoom_factor'):
-            zoom_percent = int(self.raster_canvas.zoom_factor * 100)
-            self.status_bar.showMessage(f"Масштаб: {zoom_percent}%", 2000)
-
-    def show_about(self):
-        QMessageBox.about(self, "О программе",
-                          "Seismogram Digitizer v0.1\n\n"
-                          "Программа для ручной оцифровки аналоговых сейсмограмм.\n"
-                          "НИР: Оцифровка аналоговых сейсмограмм сильных землетрясений\n\n"
-                          "Используемые технологии:\n"
-                          "- PyQt5 для интерфейса\n"
-                          "- OpenGL для отображения\n"
-                          "- NumPy/SciPy для вычислений\n"
-                          "- ObsPy для работы с сейсмическими форматами")
-
-    def show_help(self):
-        QMessageBox.information(self, "Справка",
-                                "Краткая справка:\n\n"
-                                "1. Импортируйте сейсмограмму через меню 'Файл' → 'Импорт растра'\n"
-                                "2. Создайте трассы через 'Инструменты' → 'Создать трассу'\n"
-                                "3. Щелкайте левой кнопкой мыши для оцифровки точек\n"
-                                "4. Правая кнопка завершает интервал\n"
-                                "5. Управляйте трассами и интервалами в левой панели\n"
-                                "6. Экспортируйте данные через меню 'Файл' → 'Экспорт'")
-
-    def maybe_save(self) -> bool:
-        # TODO: Проверить, были ли изменения в проекте
-        return True
-
-    def load_settings(self):
-        settings = QSettings("SeismologyLab", "SeismogramDigitizer")
-        geometry = settings.value("geometry")
-        if geometry:
-            self.restoreGeometry(geometry)
-
-    def closeEvent(self, event):
-        settings = QSettings("SeismologyLab", "SeismogramDigitizer")
-        settings.setValue("geometry", self.saveGeometry())
-
-        if self.maybe_save():
-            event.accept()
+        if total_points == 0:
+            reply = QMessageBox.question(
+                self,
+                "Завершение трассы",
+                f"Трасса '{current_trace.name}' не содержит точек.\nЗавершить её?",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
         else:
-            event.ignore()
+            reply = QMessageBox.question(
+                self,
+                "Завершение трассы",
+                f"Завершить трассу '{current_trace.name}'?\n(Содержит {total_points} точек)",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
 
-    def keyPressEvent(self, event):
-        """Обработка нажатия клавиш."""
-        # Горячие клавиши для управления
-        if event.key() == Qt.Key_T and event.modifiers() & Qt.ControlModifier:
-            # Ctrl+T - создать трассу
-            self.create_trace()
-        elif event.key() == Qt.Key_M and event.modifiers() & Qt.ControlModifier:
-            # Ctrl+M - управление трассами
-            self.show_trace_manager()
-        elif event.key() == Qt.Key_I and event.modifiers() & Qt.ControlModifier:
-            # Ctrl+I - интерполировать все
-            self.interpolate_all()
-        elif event.key() == Qt.Key_Delete:
-            # Delete - очистить текущий интервал
-            if hasattr(self.raster_canvas, 'clear_current_interval'):
-                self.raster_canvas.clear_current_interval()
-        elif event.key() == Qt.Key_Escape:
-            # Esc - сброс
-            if hasattr(self.raster_canvas, 'clear_current_interval'):
-                self.raster_canvas.clear_current_interval()
+        # Снимаем флаг редактирования с текущей трассы
+        current_trace.is_editing = False
+
+        # Очищаем текущую трассу на канвасе
+        self.canvas.current_trace = None
+        self.canvas.current_interval = None
+        self.canvas.update_display()
+
+        # Сбрасываем селектор трасс
+        self.controls_panel.trace_selector.setCurrentIndex(-1)
+
+        self.statusbar.showMessage(f"Трасса '{current_trace.name}' завершена")
+
+    def update_trace_selector(self):
+        """Обновить выпадающий список трасс"""
+        if self.current_project:
+            current_id = self.canvas.current_trace.id if self.canvas.current_trace else None
+            self.controls_panel.update_trace_selector(self.current_project.traces, current_id)
         else:
-            super().keyPressEvent(event)
+            self.controls_panel.update_trace_selector([], None)
 
-    def update_project_info(self):
-        """Обновляет информацию о проекте."""
-        if self.project:
-            stats = self.project.get_statistics()
-            info_text = f"Проект: {stats['name']} | "
-            info_text += f"Трасс: {stats['traces_count']} | "
-            info_text += f"Интервалов: {stats['total_intervals']}"
+    def on_trace_selected_from_selector(self, trace_id):
+        """Обработка выбора трассы из выпадающего списка"""
+        if not self.current_project:
+            return
+
+        if trace_id is None:
+            # Выбраны "Все трассы" - показываем все
+            for trace in self.current_project.traces:
+                trace.is_visible = True
+            self.canvas.current_trace = None
+            self.canvas.current_interval = None
+            self.canvas.update_display()  # <-- ЭТО ВАЖНО
+            self.update_trace_selector()  # <-- ОБНОВЛЯЕМ СЕЛЕКТОР
+            self.statusbar.showMessage("Режим: отображение всех трасс")
         else:
-            self.project_info_label.setText("Проект: Новый")
+            # Выбрана конкретная трасса
+            for trace in self.current_project.traces:
+                if trace.id == trace_id:
+                    # Скрываем все трассы, показываем только выбранную
+                    for t in self.current_project.traces:
+                        t.is_visible = (t.id == trace_id)
+                    self.canvas.set_current_trace(trace)
+                    self.canvas.update_display()  # <-- ЭТО ВАЖНО
+                    self.update_trace_selector()  # <-- ОБНОВЛЯЕМ СЕЛЕКТОР
+                    self.statusbar.showMessage(f"Выбрана трасса: {trace.name}")
+                    break
 
-    def on_project_updated(self):
-        """Обработчик обновления проекта."""
-        self.update_project_info()
+    def update_current_trace_display(self):
+        """Обновить отображение текущей трассы"""
+        if not self.current_project:
+            return
+
+        # Проверяем, какая трасса выбрана в селекторе
+        selected_id = self.controls_panel.get_selected_trace_id()
+
+        if selected_id is None:
+            # Режим "Все трассы"
+            for trace in self.current_project.traces:
+                trace.is_visible = True
+            self.canvas.current_trace = None
+            self.canvas.current_interval = None
+        else:
+            # Конкретная трасса
+            for trace in self.current_project.traces:
+                if trace.id == selected_id:
+                    trace.is_visible = True
+                    self.canvas.current_trace = trace
+                    if trace.intervals:
+                        self.canvas.current_interval = trace.intervals[-1]
+                else:
+                    trace.is_visible = False
+
+        self.canvas.update_display()
