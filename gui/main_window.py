@@ -51,8 +51,6 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(self.controls_panel, stretch=1)
 
-        self.canvas.mouse_moved.connect(self.update_coordinates)
-
     def setup_menu(self):
         """Настройка меню"""
         menubar = self.menuBar()
@@ -136,14 +134,6 @@ class MainWindow(QMainWindow):
         """Настройка строки состояния"""
         self.statusbar = QStatusBar()
         self.setStatusBar(self.statusbar)
-
-        self.zoom_label = QLabel("Масштаб: 100%")
-        self.mode_label = QLabel("Режим: Панорамирование")
-        self.coord_label = QLabel("Координаты: -")
-
-        self.statusbar.addWidget(self.zoom_label)
-        self.statusbar.addWidget(self.mode_label)
-        self.statusbar.addWidget(self.coord_label)
 
         self.statusbar.showMessage("Готов к работе")
 
@@ -263,10 +253,6 @@ class MainWindow(QMainWindow):
             self.statusbar.showMessage("Тренд удален")
         else:
             QMessageBox.warning(self, "Ошибка", "Недостаточно точек для удаления тренда")
-
-    def update_coordinates(self, x, y):
-        """Обновление отображения координат"""
-        self.coord_label.setText(f"Координаты: ({x:.1f}, {y:.1f})")
 
     def on_select_trace(self, trace_id):
         """Выбрать трассу для работы (без включения режима оцифровки)"""

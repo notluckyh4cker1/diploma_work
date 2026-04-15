@@ -5,7 +5,6 @@ import numpy as np
 
 
 class RasterCanvas(QGraphicsView):
-    mouse_moved = pyqtSignal(float, float)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -43,7 +42,7 @@ class RasterCanvas(QGraphicsView):
 
         # Zoom limits
         self.min_zoom = 0.1
-        self.max_zoom = 50.0
+        self.max_zoom = 200.0
         self.current_zoom = 1.0
 
         # Для перемещения точек
@@ -147,14 +146,6 @@ class RasterCanvas(QGraphicsView):
 
     def mouseMoveEvent(self, event: QMouseEvent):
         """Обработка движения мыши"""
-        # Отправляем сигнал с координатами для статус-бара
-        scene_pos = self.mapToScene(event.pos())
-        if self.pixmap_item:
-            rect = self.pixmap_item.boundingRect()
-            if rect.contains(scene_pos):
-                self.mouse_moved.emit(scene_pos.x(), scene_pos.y())
-
-        # Перемещение точки
         if self.mode == 'move_point' and self.dragging_point and self.dragging_point_idx >= 0:
             scene_pos = self.mapToScene(event.pos())
             if self.pixmap_item:
