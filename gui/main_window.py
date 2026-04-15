@@ -23,7 +23,6 @@ class MainWindow(QMainWindow):
 
         self.setup_ui()
         self.setup_menu()
-        self.setup_statusbar()
 
     def setup_ui(self):
         """Настройка пользовательского интерфейса"""
@@ -57,7 +56,7 @@ class MainWindow(QMainWindow):
         """Настройка меню"""
         menubar = self.menuBar()
 
-        # Меню File
+        # Меню Файл
         file_menu = menubar.addMenu("Файл")
 
         new_action = QAction("Новый проект", self)
@@ -88,14 +87,14 @@ class MainWindow(QMainWindow):
 
         file_menu.addSeparator()
 
-        # Подменю экспорта
+        # Подменю Экспорт (в меню Файл)
         export_menu = file_menu.addMenu("Экспорт")
 
         export_csv_action = QAction("CSV формат...", self)
         export_csv_action.triggered.connect(self.export_all_data)
         export_menu.addAction(export_csv_action)
 
-        # Меню Edit
+        # Меню Правка
         edit_menu = menubar.addMenu("Правка")
 
         undo_action = QAction("Отменить", self)
@@ -114,7 +113,7 @@ class MainWindow(QMainWindow):
         settings_action.triggered.connect(self.project_settings)
         edit_menu.addAction(settings_action)
 
-        # Меню View
+        # Меню Вид
         view_menu = menubar.addMenu("Вид")
 
         zoom_in_action = QAction("Приблизить", self)
@@ -131,21 +130,6 @@ class MainWindow(QMainWindow):
         fit_view_action.setShortcut(QKeySequence("Ctrl+F"))
         fit_view_action.triggered.connect(self.fit_view)
         view_menu.addAction(fit_view_action)
-
-    def setup_statusbar(self):
-        """Настройка строки состояния"""
-        self.statusbar = QStatusBar()
-        self.setStatusBar(self.statusbar)
-
-        self.zoom_label = QLabel("Масштаб: 100%")
-        self.mode_label = QLabel("Режим: Панорамирование")
-        self.coord_label = QLabel("Координаты: -")
-
-        self.statusbar.addWidget(self.zoom_label)
-        self.statusbar.addWidget(self.mode_label)
-        self.statusbar.addWidget(self.coord_label)
-
-        self.statusbar.showMessage("Готов к работе")
 
     def new_project(self):
         """Создать новый проект"""
@@ -178,7 +162,6 @@ class MainWindow(QMainWindow):
             self.canvas.current_interval = None
             self.canvas.update_display()
 
-            # Обновляем селектор трасс
             self.controls_panel.update_trace_selector(self.current_project.traces, None)
 
             self.statusbar.showMessage(f"Загружен проект: {self.current_project.name}")
@@ -278,21 +261,18 @@ class MainWindow(QMainWindow):
         if not trace:
             return
 
-        # Скрываем все трассы, показываем только выбранную
         for t in self.current_project.traces:
-            t.is_visible = (t.id == trace_id)
+            t.is_visible = (t.id == trace_id) # Скрываем все трассы, показываем только выбранную
 
-        # Устанавливаем текущую трассу
-        self.canvas.set_current_trace(trace)
+        self.canvas.set_current_trace(trace) # Устанавливаем текущую трассу
         self.canvas.update_display()
 
-        # Обновляем селектор
         self.controls_panel.set_selected_trace(trace_id)
 
     def on_mode_changed(self, mode: str):
         """Обработка смены режима"""
         if mode == 'digitize':
-            self.canvas.set_mode('add_point')  # По умолчанию режим добавления точек
+            self.canvas.set_mode('add_point')
             self.controls_panel.set_digitize_tools_enabled(True)
             self.mode_label.setText("Режим: Оцифровка")
         elif mode == 'pan':
@@ -333,15 +313,12 @@ class MainWindow(QMainWindow):
 
     def on_trace_selected_for_editing(self, trace):
         """Обработка выбора трассы для оцифровки из менеджера"""
-        # Скрываем все трассы, показываем только выбранную
         for t in self.current_project.traces:
             t.is_visible = (t.id == trace.id)
 
-        # Устанавливаем текущую трассу
         self.canvas.set_current_trace(trace)
         self.canvas.update_display()
 
-        # Обновляем селектор
         self.controls_panel.set_selected_trace(trace.id)
 
         self.statusbar.showMessage(f"Выбрана трасса для оцифровки: {trace.name}")

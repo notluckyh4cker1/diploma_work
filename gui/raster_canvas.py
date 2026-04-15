@@ -43,7 +43,7 @@ class RasterCanvas(QGraphicsView):
 
         # Zoom limits
         self.min_zoom = 0.1
-        self.max_zoom = 50.0
+        self.max_zoom = 150.0
         self.current_zoom = 1.0
 
         # Для перемещения точек
@@ -147,14 +147,12 @@ class RasterCanvas(QGraphicsView):
 
     def mouseMoveEvent(self, event: QMouseEvent):
         """Обработка движения мыши"""
-        # Отправляем сигнал с координатами для статус-бара
         scene_pos = self.mapToScene(event.pos())
         if self.pixmap_item:
             rect = self.pixmap_item.boundingRect()
             if rect.contains(scene_pos):
                 self.mouse_moved.emit(scene_pos.x(), scene_pos.y())
 
-        # Перемещение точки
         if self.mode == 'move_point' and self.dragging_point and self.dragging_point_idx >= 0:
             scene_pos = self.mapToScene(event.pos())
             if self.pixmap_item:
@@ -194,7 +192,7 @@ class RasterCanvas(QGraphicsView):
             )
             self.current_trace.add_interval(self.current_interval)
 
-        # Проверяем границы
+        # Проверка границ
         if self.pixmap_item:
             rect = self.pixmap_item.boundingRect()
             x = max(rect.left(), min(rect.right(), x))
@@ -249,7 +247,6 @@ class RasterCanvas(QGraphicsView):
         if self.current_interval and len(self.current_interval.points) > 0:
             self.save_to_history()
 
-            # Создаем новый интервал
             from models.trace import Interval
             import uuid
             new_interval = Interval(
@@ -314,34 +311,28 @@ class RasterCanvas(QGraphicsView):
             if item != self.pixmap_item:
                 self.scene.removeItem(item)
 
-        # Рисуем ВСЕ видимые трассы из проекта
         if hasattr(self, 'current_trace') and self.current_trace:
-            # Если есть активная трасса - рисуем её и все видимые из проекта
             if hasattr(self.current_trace, 'project') and self.current_trace.project:
                 for trace in self.current_trace.project.traces:
                     if trace.is_visible:
                         for interval in trace.intervals:
                             if interval and interval.points:
-                                # Разный цвет для активной и неактивной трассы
                                 if trace == self.current_trace:
                                     self.draw_interval(interval, color=QColor(255, 50, 50))
                                 else:
                                     self.draw_interval(interval, color=QColor(255, 215, 0))
             else:
-                # Если нет проекта, но есть текущая трасса
                 if self.current_trace and self.current_trace.is_visible:
                     for interval in self.current_trace.intervals:
                         if interval and interval.points:
                             self.draw_interval(interval)
         else:
-            # Нет активной трассы - рисуем ВСЕ видимые трассы из проекта
             if hasattr(self, 'current_project') and self.current_project:
                 for trace in self.current_project.traces:
                     if trace.is_visible:
                         for interval in trace.intervals:
                             if interval and interval.points:
-                                self.draw_interval(interval, color=QColor(255, 50, 50))  # Синий цвет для обзора
-
+                                self.draw_interval(interval, color=QColor(255, 50, 50))
     def draw_interval(self, interval, color=None):
         """Нарисовать интервал"""
         if not interval or not interval.points:
@@ -356,7 +347,6 @@ class RasterCanvas(QGraphicsView):
         line_color = color if color else self.line_color
         point_color = color if color else self.point_color
 
-        # Рисуем линии
         if self.show_lines and num_points > 1:
             pen = QPen(line_color, self.line_width)
             for i in range(num_points - 1):
@@ -366,7 +356,6 @@ class RasterCanvas(QGraphicsView):
                     pen
                 )
 
-        # Рисуем точки
         if self.show_points:
             for point in points:
                 ellipse = self.scene.addEllipse(
