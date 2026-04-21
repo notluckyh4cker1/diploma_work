@@ -95,9 +95,11 @@ class VisibilityDialog(QDialog):
             name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
             self.table.setItem(row, 1, name_item)
 
-            # Информация (количество точек)
-            total_points = sum(len(interval.points) for interval in trace.intervals)
-            info_text = f"Точек: {total_points}, Интервалов: {len(trace.intervals)}"
+            # Подсчет только интервалов с точками
+            intervals_with_points = [interval for interval in trace.intervals if interval.points]
+            total_points = sum(len(interval.points) for interval in trace.intervals if interval.points)
+
+            info_text = f"Точек: {total_points}, Интервалов: {len(intervals_with_points)}"
             info_item = QTableWidgetItem(info_text)
             info_item.setFlags(info_item.flags() & ~Qt.ItemIsEditable)
             info_item.setTextAlignment(Qt.AlignCenter)

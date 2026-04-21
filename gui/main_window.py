@@ -260,6 +260,18 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Ошибка", "Сначала создайте или откройте проект")
             return
 
+        if trace_id is None:
+            # Сбрасываем текущую трассу
+            self.canvas.current_trace = None
+            self.canvas.current_interval = None
+            # Показываем все трассы
+            for t in self.current_project.traces:
+                t.is_visible = True
+            self.canvas.update_display()
+            self.controls_panel.set_selected_trace(None)
+            self.statusbar.showMessage("Режим просмотра всех трасс")
+            return
+
         trace = self.current_project.get_trace(trace_id)
         if not trace:
             return
@@ -280,20 +292,15 @@ class MainWindow(QMainWindow):
         if mode == 'digitize':
             self.canvas.set_mode('add_point')  # По умолчанию режим добавления точек
             self.controls_panel.set_digitize_tools_enabled(True)
-            self.mode_label.setText("Режим: Оцифровка")
         elif mode == 'pan':
             self.canvas.set_mode('pan')
             self.controls_panel.set_digitize_tools_enabled(False)
-            self.mode_label.setText("Режим: Панорамирование")
         elif mode == 'add_point':
             self.canvas.set_mode('add_point')
-            self.mode_label.setText("Режим: Добавление точек")
         elif mode == 'delete_point':
             self.canvas.set_mode('delete_point')
-            self.mode_label.setText("Режим: Удаление точек")
         elif mode == 'move_point':
             self.canvas.set_mode('move_point')
-            self.mode_label.setText("Режим: Перемещение точек")
 
     def finish_current_interval(self):
         """Завершить текущий интервал оцифровки"""
@@ -315,7 +322,13 @@ class MainWindow(QMainWindow):
         from gui.dialogs.trace_manager_dialog import TraceManagerDialog
         dialog = TraceManagerDialog(self.current_project, self)
         dialog.trace_selected_for_editing.connect(self.on_trace_selected_for_editing)
+
+        old_traces_count = len(self.current_project.traces)
         dialog.exec_()
+
+        new_traces_count = len(self.current_project.traces)
+        if new_traces_count != old_traces_count:
+            self.controls_panel.update_trace_selector(self.current_project.traces, None)
 
     def on_trace_selected_for_editing(self, trace):
         """Обработка выбора трассы для оцифровки из менеджера"""
@@ -389,6 +402,9 @@ class MainWindow(QMainWindow):
         self.canvas.current_trace = None
         self.canvas.current_interval = None
         self.canvas.update_display()
+
+        self.controls_panel.update_trace_selector(self.current_project.traces, None)
+        self.controls_panel.set_selected_trace(None)
 
         self.statusbar.showMessage(f"Трасса '{current_trace.name}' завершена")
 

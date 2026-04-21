@@ -112,14 +112,15 @@ class TraceManagerDialog(QDialog):
             self.table.setItem(row, 1, id_item)
 
             # Количество интервалов
-            intervals_count = len(trace.intervals)
+            intervals_with_points = [i for i in trace.intervals if i.points]
+            intervals_count = len(intervals_with_points)
             intervals_item = QTableWidgetItem(str(intervals_count))
             intervals_item.setTextAlignment(Qt.AlignCenter)
             intervals_item.setFlags(intervals_item.flags() & ~Qt.ItemIsEditable)
             self.table.setItem(row, 2, intervals_item)
 
             # Количество точек
-            total_points = sum(len(interval.points) for interval in trace.intervals)
+            total_points = sum(len(i.points) for i in trace.intervals if i.points)
             points_item = QTableWidgetItem(str(total_points))
             points_item.setTextAlignment(Qt.AlignCenter)
             points_item.setFlags(points_item.flags() & ~Qt.ItemIsEditable)
@@ -178,13 +179,14 @@ class TraceManagerDialog(QDialog):
             QMessageBox.warning(self, "Ошибка", "Выберите трассу для удаления")
             return
 
-        total_points = sum(len(interval.points) for interval in trace.intervals)
+        intervals_with_points = [i for i in trace.intervals if i.points]
+        total_points = sum(len(i.points) for i in trace.intervals if i.points)
 
         reply = QMessageBox.question(
             self,
             "Подтверждение удаления",
             f"Вы уверены, что хотите удалить трассу '{trace.name}'?\n"
-            f"(Содержит {len(trace.intervals)} интервалов и {total_points} точек)",
+            f"(Содержит {len(intervals_with_points)} интервалов и {total_points} точек)",
             QMessageBox.Yes | QMessageBox.No
         )
 

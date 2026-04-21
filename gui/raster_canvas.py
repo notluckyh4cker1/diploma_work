@@ -394,14 +394,7 @@ class RasterCanvas(QGraphicsView):
         if trace and trace.intervals:
             self.current_interval = trace.intervals[-1]
         elif trace:
-            from models.trace import Interval
-            import uuid
-            self.current_interval = Interval(
-                id=str(uuid.uuid4()),
-                trace_id=trace.id,
-                points=[]
-            )
-            trace.add_interval(self.current_interval)
+            self.current_interval = None
         else:
             self.current_interval = None
 

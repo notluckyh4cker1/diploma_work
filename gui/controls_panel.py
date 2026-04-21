@@ -202,8 +202,10 @@ class ControlsPanel(QWidget):
 
     def on_trace_selected(self, index):
         """Выбор трассы из списка"""
-        if index <= 0:
+        if index == 0:
+            self.select_trace_requested.emit(None)
             return
+
         trace_id = self.trace_selector.itemData(index)
         if trace_id:
             self.select_trace_requested.emit(trace_id)
@@ -223,3 +225,8 @@ class ControlsPanel(QWidget):
             index = self.trace_selector.findData(trace_id)
             if index >= 0:
                 self.trace_selector.setCurrentIndex(index)
+        else:
+            # Если trace_id = None, сбрасываем на "Выберите трассу"
+            self.trace_selector.blockSignals(True)
+            self.trace_selector.setCurrentIndex(0)
+            self.trace_selector.blockSignals(False)
