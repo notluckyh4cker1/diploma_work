@@ -129,6 +129,9 @@ class ExportDialog(QDialog):
             lambda t: self.custom_units_edit.setEnabled(t == "custom")
         )
 
+        self.raw_points_cb = QCheckBox("Экспортировать только сырые точки (без интерполяции)")
+        form_layout.addRow("", self.raw_points_cb)
+
         general_group.setLayout(form_layout)
         layout.addWidget(general_group)
 
@@ -210,17 +213,23 @@ class ExportDialog(QDialog):
 
         # Добавляем трассы
         for trace in project.traces:
-            total_points = sum(len(interval.points) for interval in trace.intervals)
+            # Подсчитываем только интервалы с точками
+            intervals_with_points = [i for i in trace.intervals if i.points]
+            total_points = sum(len(i.points) for i in trace.intervals if i.points)
+
             trace_item = QTreeWidgetItem(self.selection_tree)
             trace_item.setText(0, trace.name)
             trace_item.setText(1, "Трасса")
             trace_item.setText(2, str(total_points))
-            trace_item.setText(3, str(len(trace.intervals)))
+            trace_item.setText(3, str(len(intervals_with_points)))  # Только интервалы с точками
             trace_item.setData(0, Qt.UserRole, ("trace", trace.id, trace.name))
             trace_item.setCheckState(0, Qt.Unchecked)
 
-            # Добавляем интервалы трассы
-            for interval in trace.intervals:
+            # Добавляем ТОЛЬКО интервалы с точками
+            for interval in intervals_with_points:  # Используем отфильтрованный список
+                if not interval.points:  # Дополнительная проверка
+                    continue
+
                 interval_item = QTreeWidgetItem(trace_item)
                 interval_item.setText(0, f"Интервал {interval.id[:8]}")
                 interval_item.setText(1, "Волновая форма")
@@ -269,8 +278,10 @@ class ExportDialog(QDialog):
         if not trace:
             return
 
-        total_points = sum(len(interval.points) for interval in trace.intervals)
-        total_intervals = len(trace.intervals)
+        # Подсчитываем только интервалы с точками
+        intervals_with_points = [i for i in trace.intervals if i.points]
+        total_points = sum(len(i.points) for i in trace.intervals if i.points)
+        total_intervals = len(intervals_with_points)
 
         preview_text = f"""
         <b>Трасса: {trace_name}</b><br>
@@ -282,12 +293,16 @@ class ExportDialog(QDialog):
         <b>Интервалы:</b><br>
         """
 
-        for i, interval in enumerate(trace.intervals):
+        # Показываем только интервалы с точками
+        for i, interval in enumerate(intervals_with_points):
             points = interval.points
             if points:
                 x_vals = [p.x for p in points]
                 y_vals = [p.y for p in points]
                 preview_text += f"  Интервал {i + 1}: {len(points)} точек, X: [{min(x_vals):.1f}, {max(x_vals):.1f}], Y: [{min(y_vals):.1f}, {max(y_vals):.1f}]<br>"
+
+        if total_intervals == 0:
+            preview_text += "  Нет интервалов с точками<br>"
 
         self.preview_label.setText(f"Предпросмотр: {trace_name}")
         self.preview_text.setText(preview_text)
@@ -396,6 +411,8 @@ class ExportDialog(QDialog):
         project = self.main_window.current_project
         all_data = []
 
+        raw_only = settings.get('raw_points_only', False)
+
         for item in selected_items:
             item_type = item[0]
 
@@ -406,7 +423,10 @@ class ExportDialog(QDialog):
 
                 if trace:
                     for interval in trace.intervals:
-                        data = self.extract_interval_data(interval, trace_name, settings)
+                        if raw_only:
+                            data = self.extract_interval_data_simple(interval, trace_name, settings)
+                        else:
+                            data = self.extract_interval_data(interval, trace_name, settings)
                         if data:
                             all_data.append(data)
 
@@ -419,7 +439,10 @@ class ExportDialog(QDialog):
                 if trace:
                     for interval in trace.intervals:
                         if interval.id == interval_id:
-                            data = self.extract_interval_data(interval, trace_name, settings)
+                            if raw_only:
+                                data = self.extract_interval_data_simple(interval, trace_name, settings)
+                            else:
+                                data = self.extract_interval_data(interval, trace_name, settings)
                             if data:
                                 all_data.append(data)
                             break

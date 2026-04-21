@@ -90,8 +90,20 @@ class MainWindow(QMainWindow):
         export_menu = file_menu.addMenu("Экспорт")
 
         export_csv_action = QAction("CSV формат...", self)
-        export_csv_action.triggered.connect(self.export_all_data)
+        export_csv_action.triggered.connect(lambda: self.show_export_dialog("CSV"))
         export_menu.addAction(export_csv_action)
+
+        export_sac_action = QAction("SAC формат...", self)
+        export_sac_action.triggered.connect(lambda: self.show_export_dialog("SAC"))
+        export_menu.addAction(export_sac_action)
+
+        export_npy_action = QAction("NumPy NPY/NPZ...", self)
+        export_npy_action.triggered.connect(lambda: self.show_export_dialog("NPY"))
+        export_menu.addAction(export_npy_action)
+
+        export_mseed_action = QAction("MiniSEED...", self)
+        export_mseed_action.triggered.connect(lambda: self.show_export_dialog("MiniSEED"))
+        export_menu.addAction(export_mseed_action)
 
         # Меню Edit
         edit_menu = menubar.addMenu("Правка")
@@ -409,7 +421,7 @@ class MainWindow(QMainWindow):
         self.statusbar.showMessage(f"Трасса '{current_trace.name}' завершена")
 
     def export_all_data(self):
-        """Экспорт всех данных в CSV"""
+        """Экспорт данных через диалог"""
         if not self.current_project:
             QMessageBox.warning(self, "Ошибка", "Сначала создайте или откройте проект")
             return
@@ -418,55 +430,31 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Ошибка", "Нет данных для экспорта")
             return
 
-        export_dir = QFileDialog.getExistingDirectory(self, "Выберите директорию для экспорта")
-        if not export_dir:
-            return
+        # Создаем диалог выбора формата
+        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QComboBox, QDialogButtonBox
 
-        import os
-        import numpy as np
-        from scipy import interpolate
-        import csv
+        format_dialog = QDialog(self)
+        format_dialog.setWindowTitle("Выбор формата экспорта")
+        format_dialog.setModal(True)
 
-        success_count = 0
-        total_points = 0
+        layout = QVBoxLayout(format_dialog)
+        layout.addWidget(QLabel("Выберите формат экспорта:"))
 
-        for trace in self.current_project.traces:
-            for i, interval in enumerate(trace.intervals):
-                if not interval.points:
-                    continue
+        format_combo = QComboBox()
+        format_combo.addItems(["CSV", "SAC", "NPY", "MiniSEED"])
+        layout.addWidget(format_combo)
 
-                points = interval.points
-                x_vals = np.array([p.x for p in points])
-                y_vals = np.array([p.y for p in points])
+        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        button_box.accepted.connect(format_dialog.accept)
+        button_box.rejected.connect(format_dialog.reject)
+        layout.addWidget(button_box)
 
-                sort_idx = np.argsort(x_vals)
-                x_sorted = x_vals[sort_idx]
-                y_sorted = y_vals[sort_idx]
+        if format_dialog.exec_() == QDialog.Accepted:
+            selected_format = format_combo.currentText()
+            self.show_export_dialog(selected_format)
 
-                if len(points) >= 2:
-                    num_samples = max(10, min(len(points) * 10, 10000))
-                    x_interp = np.linspace(x_sorted[0], x_sorted[-1], num_samples)
-                    f = interpolate.interp1d(x_sorted, y_sorted, kind='cubic', fill_value='extrapolate')
-                    y_interp = f(x_interp)
-
-                    time = np.linspace(0, len(y_interp) / 100.0, len(y_interp))
-
-                    filename = f"{trace.name}_interval_{i + 1}.csv"
-                    filepath = os.path.join(export_dir, filename)
-
-                    with open(filepath, 'w', newline='') as csvfile:
-                        writer = csv.writer(csvfile)
-                        writer.writerow(['Time (s)', 'Amplitude (pixels)', 'X_pixel', 'Y_pixel'])
-                        for j, (t, a, x, y) in enumerate(zip(time, y_interp, x_interp, y_interp)):
-                            writer.writerow([f"{t:.6f}", f"{a:.6f}", f"{x:.2f}", f"{y:.2f}"])
-
-                    success_count += 1
-                    total_points += len(points)
-
-        QMessageBox.information(
-            self,
-            "Экспорт завершен",
-            f"Экспортировано {success_count} интервалов\n"
-            f"Всего точек: {total_points}\n"
-            f"Директория: {export_dir}"
-        )
+    def show_export_dialog(self, format_type):
+        """Показать диалог экспорта для выбранного формата"""
+        from gui.dialogs.export_dialog import ExportDialog
+        dialog = ExportDialog(self, format_type=format_type)
+        dialog.exec_()
